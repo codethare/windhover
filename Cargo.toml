@@ -1,0 +1,30 @@
+[package]
+name = "windhover"
+version = "0.1.0"
+edition = "2024"
+description = "Keyboard-driven mouse cursor for wlroots-based Wayland compositors"
+license = "GPL-3.0-or-later"
+keywords = ["wayland", "mouse", "keyboard", "accessibility"]
+categories = ["accessibility"]
+rust-version = "1.85"
+
+[dependencies]
+anyhow = "1.0.103"
+libc = "0.2"
+rustix = { version = "1.1", features = ["event", "fs"] }
+swash = "0.2"
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+xkbcommon = { version = "0.9", default-features = false }
+
+atspi = { version = "0.30", default-features = false, features = ["connection", "proxies", "zbus"], optional = true }
+futures-executor = { version = "0.3", optional = true }
+
+[dev-dependencies]
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+
+[features]
+default = []
+atspi = ["dep:atspi", "dep:futures-executor"]
