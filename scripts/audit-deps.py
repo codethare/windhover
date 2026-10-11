@@ -84,8 +84,12 @@ def audit() -> int:
         ).stdout
     )
 
+    # A set of (name, version) pairs, not a name-keyed mapping: a crate can appear
+    # in the graph at two versions at once (zbus pulling quick-xml 0.38 while
+    # wayland-scanner pulls 0.41, for instance), and collapsing those hides the
+    # vulnerable one behind the patched one.
     packages = sorted(
-        {p["name"]: p["version"] for p in metadata["packages"] if p["source"]}.items()
+        {(p["name"], p["version"]) for p in metadata["packages"] if p["source"]}
     )
 
     applicable = []

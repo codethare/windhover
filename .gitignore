@@ -59,6 +59,8 @@ $RECYCLE.BIN/
 *.log
 tmp/
 temp/
+__pycache__/
+*.pyc
 
 # ── Project-local notes / planning ───────────────────────────
 plan/

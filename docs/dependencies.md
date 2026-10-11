@@ -31,7 +31,13 @@ direct dependency has to be registered here first and pass the check below.
 | `anyhow` | 1.0.104 | error context | RUSTSEC-2026-0190 (`downcast_mut` unsound), fixed in 1.0.103; this project does not use that method |
 | `libc` | 0.2 | installing the signal handlers that let a session clean up on `SIGTERM` | none |
 
-The default build's dependency graph is **38** crates (`cargo tree -e normal`).
+The default build's dependency graph is **38** crates for the Linux target
+(`cargo tree -e normal --target x86_64-unknown-linux-gnu`), or 45 (name, version)
+pairs across all platforms.
+
+The crate's declared `rust-version` is **1.87**. It was 1.85 (what edition 2024
+needs) until the fix recorded under "What the gate caught" below, which needs a
+`zbus_xml` that will not build on anything older.
 
 ## Rejected
 
@@ -53,7 +59,7 @@ The default build's dependency graph is **38** crates (`cargo tree -e normal`).
 
 ## What the `atspi` feature costs and buys
 
-`--features atspi` grows the graph from **38** crates to **103** (`atspi` →
+`--features atspi` grows the graph from **38** crates to **105** (`atspi` →
 `zbus` → the async-io ecosystem). It is off by default, so only builds that ask
 for it are affected.
 
@@ -65,6 +71,46 @@ falls back to the lattice silently — so **on a system without an accessibility
 bus, and for an application that does not publish a tree, hint mode behaves
 exactly as the default build does.** `scripts/headless-check.sh` runs with
 `FEATURES=atspi` and asserts the same landing positions.
+
+## Code that runs at build time
+
+`build.rs` scripts and proc macros execute with the developer's privileges
+during `cargo build`, so they are dependencies that run code and are inventoried
+here rather than discovered later.
+
+The default build has **8 crates with a build script** — `anyhow`, `libc`,
+`proc-macro2`, `quote`, `rustix`, `wayland-backend`, `wayland-client`,
+`wayland-sys` — and **2 proc-macro crates**: `bytemuck_derive` and
+`wayland-scanner`. With `--all-features` that becomes 17 and 13, the extra ones
+arriving through `zbus`/`atspi` and `serde`. Every one of them comes from
+crates.io with a checksum in `Cargo.lock`, which is what makes "no `git = ` or
+`path = ` dependencies" worth enforcing: it is the only thing anchoring those
+scripts to a reviewed artefact.
+
+## What the gate caught
+
+The gate had a bug, and the bug hid a real advisory. It read the graph into a
+mapping keyed by crate name, so when two versions of one crate were present only
+one of them was ever checked. `zbus` (through the `atspi` feature) pulls
+`quick-xml` 0.38.4 while `wayland-scanner` pulls 0.41.0, and the surviving entry
+happened to be the patched one:
+
+```
+quick-xml 0.38.4: RUSTSEC-2026-0194   (quadratic run time on duplicate attributes)
+quick-xml 0.38.4: RUSTSEC-2026-0195   (unbounded namespace allocation)
+```
+
+Both are denial of service (`A:H`, no confidentiality or integrity impact), and
+both are fixed in `quick-xml` 0.41.0. The default build was never affected: only
+0.41.0 is in its graph. The `atspi` build was.
+
+The fix, in two parts:
+
+- `scripts/audit-deps.py` now keeps a set of `(name, version)` pairs instead of a
+  name-keyed mapping, so a crate at two versions is checked at both.
+- `zbus_xml` 5.2.1 dropped `quick-xml` for `winnow`, so raising `rust-version` to
+  `1.87` and running `cargo update` removes `quick-xml` 0.38.4 from the graph
+  entirely. `quick-xml` 0.41.0 (through `wayland-scanner`) stays and is patched.
 
 ## The check
 

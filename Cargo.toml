@@ -6,7 +6,7 @@ description = "Keyboard-driven mouse cursor for wlroots-based Wayland compositor
 license = "GPL-3.0-or-later"
 keywords = ["wayland", "mouse", "keyboard", "accessibility"]
 categories = ["accessibility"]
-rust-version = "1.85"
+rust-version = "1.87"
 
 [dependencies]
 anyhow = "1.0.103"
