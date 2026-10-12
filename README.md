@@ -55,24 +55,6 @@ cargo build --release
 install -Dm755 target/release/windhover ~/.local/bin/windhover
 ```
 
-## Hints from the accessibility tree
-
-By default hint mode lays out labelled targets on a regular lattice across the
-output, which needs nothing from the applications on screen. With the `atspi`
-feature the targets come from the accessibility tree instead: the centres of the
-interactive elements it reports (buttons, entries, links, list items, tabs and
-so on).
-
-```sh
-cargo build --release --features atspi
-```
-
-The feature is opt-in because it pulls in the `atspi`/`zbus` stack, which is far
-larger than everything else put together. When the accessibility bus is not
-running, when an application does not publish an accessibility tree, or when the
-walk exceeds its time budget, hint mode falls back to the lattice silently and
-behaves exactly as the default build does.
-
 See [docs/dependencies.md](docs/dependencies.md) for the dependency admission
 rules and the audit command.
 
@@ -119,12 +101,10 @@ windhover --hint
 
 ```sh
 cargo test                                  # unit tests
-cargo test --features atspi                 # including the element-source fallback
 
 sh scripts/headless-check.sh sway           # end-to-end, per compositor
 sh scripts/headless-check.sh river
 sh scripts/headless-check.sh niri
-FEATURES=atspi sh scripts/headless-check.sh sway   # same suite, atspi build
 
 sh scripts/capture.sh /tmp/shots            # one PNG per mode, for looking at
 python3 scripts/audit-deps.py               # dependency audit

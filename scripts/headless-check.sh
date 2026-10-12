@@ -42,10 +42,7 @@ fail() {
 }
 
 echo "building"
-# FEATURES passes through, so the same checks cover the `atspi` build: with no
-# accessibility bus running, hint mode has to fall back to the lattice.
-FEATURES=${FEATURES:-}
-cargo build --quiet --manifest-path "$ROOT/Cargo.toml" ${FEATURES:+--features "$FEATURES"} \
+cargo build --quiet --manifest-path "$ROOT/Cargo.toml" \
   --example virtual_keyboard --example cursor_probe
 WINDHOVER="$ROOT/target/debug/windhover"
 INJECTOR="$ROOT/target/debug/examples/virtual_keyboard"

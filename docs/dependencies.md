@@ -35,9 +35,10 @@ The default build's dependency graph is **38** crates for the Linux target
 (`cargo tree -e normal --target x86_64-unknown-linux-gnu`), or 45 (name, version)
 pairs across all platforms.
 
-The crate's declared `rust-version` is **1.87**. It was 1.85 (what edition 2024
-needs) until the fix recorded under "What the gate caught" below, which needs a
-`zbus_xml` that will not build on anything older.
+The crate's declared `rust-version` is **1.85**, which is what edition 2024
+requires. It was raised to 1.87 briefly, to take a `zbus_xml` that would build
+without the vulnerable `quick-xml`; dropping the `atspi` feature removed that
+reason along with the whole subgraph, so it is back down.
 
 ## Rejected
 
@@ -48,29 +49,8 @@ needs) until the fix recorded under "What the gate caught" below, which needs a
 | `fontique` | it also removes `ttf-parser`, but pulls in ICU, `memmap2` and `hashbrown` for what is here a single step: family name to file path. The system's own `fc-match` does that, with a probe list as the fallback |
 | `memmap2` | its advisory is fixed as of 0.9.11, but turning off `xkbcommon`'s default features keeps the mmap path out of the tree entirely |
 | `png` | only ever reached through `tiny-skia`'s default feature; nothing here encodes or decodes PNG |
+| `atspi` (with `zbus`, `futures-executor` and 64 more) | 67 crates — more than the rest of the project combined — for one optional capability, element-level hint targets. It was never verified: the test machine has no accessibility bus and no accessible application, so only its fallback path was measurable. It was also the origin of the project's one advisory (`quick-xml`, through `zbus`) and the only part of the tree opening IPC to another process. Hint mode uses the lattice, which was already its default source |
 | `clap`, `serde`, `toml` | the command line is four flags and the configuration is a line-oriented `<option>: <value>` file; writing both by hand is about 100 lines, less than the transitive weight of those crates |
-
-## Dependencies of the opt-in `atspi` feature
-
-| crate | used for |
-|---|---|
-| `atspi` 0.30 (`connection` + `proxies` + `zbus`, without `p2p`/`wrappers`/`tracing`) | reading the accessibility tree |
-| `futures-executor` 0.3 | the AT-SPI bindings are asynchronous; `block_on` connects them to a single-threaded session |
-
-## What the `atspi` feature costs and buys
-
-`--features atspi` grows the graph from **38** crates to **105** (`atspi` →
-`zbus` → the async-io ecosystem). It is off by default, so only builds that ask
-for it are affected.
-
-What it buys: hint targets come from the centres of the interactive elements in
-the accessibility tree (buttons, entries, list items, links and so on) rather
-than only from a regular lattice. When the accessibility bus is unavailable, when
-there are no candidates, or when the walk exceeds its time budget, hint mode
-falls back to the lattice silently — so **on a system without an accessibility
-bus, and for an application that does not publish a tree, hint mode behaves
-exactly as the default build does.** `scripts/headless-check.sh` runs with
-`FEATURES=atspi` and asserts the same landing positions.
 
 ## Code that runs at build time
 
@@ -78,14 +58,13 @@ exactly as the default build does.** `scripts/headless-check.sh` runs with
 during `cargo build`, so they are dependencies that run code and are inventoried
 here rather than discovered later.
 
-The default build has **8 crates with a build script** — `anyhow`, `libc`,
+The build has **8 crates with a build script** — `anyhow`, `libc`,
 `proc-macro2`, `quote`, `rustix`, `wayland-backend`, `wayland-client`,
 `wayland-sys` — and **2 proc-macro crates**: `bytemuck_derive` and
-`wayland-scanner`. With `--all-features` that becomes 17 and 13, the extra ones
-arriving through `zbus`/`atspi` and `serde`. Every one of them comes from
-crates.io with a checksum in `Cargo.lock`, which is what makes "no `git = ` or
-`path = ` dependencies" worth enforcing: it is the only thing anchoring those
-scripts to a reviewed artefact.
+`wayland-scanner`. (Before the `atspi` feature was dropped those were 17 and 13.)
+Every one of them comes from crates.io with a checksum in `Cargo.lock`, which is
+what makes "no `git = ` or `path = ` dependencies" worth enforcing: it is the
+only thing anchoring those scripts to a reviewed artefact.
 
 ## What the gate caught
 
@@ -109,8 +88,11 @@ The fix, in two parts:
 - `scripts/audit-deps.py` now keeps a set of `(name, version)` pairs instead of a
   name-keyed mapping, so a crate at two versions is checked at both.
 - `zbus_xml` 5.2.1 dropped `quick-xml` for `winnow`, so raising `rust-version` to
-  `1.87` and running `cargo update` removes `quick-xml` 0.38.4 from the graph
-  entirely. `quick-xml` 0.41.0 (through `wayland-scanner`) stays and is patched.
+  `1.87` and running `cargo update` removed `quick-xml` 0.38.4 from the graph.
+  `quick-xml` 0.41.0 (through `wayland-scanner`) stays and is patched.
+- The `atspi` feature was then dropped outright (see the rejected table), which
+  removed `zbus` and its 65 crates rather than tracking them, and let the MSRV go
+  back to 1.85.
 
 ## The check
 

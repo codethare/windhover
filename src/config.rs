@@ -32,9 +32,6 @@ pub struct Config {
     /// A grid region smaller than this in either direction is small enough to
     /// hand over to normal mode.
     pub grid_min_span: f64,
-    /// How long the element source may take before hint mode falls back to the
-    /// lattice.
-    pub atspi_budget: std::time::Duration,
 }
 
 impl Default for Config {
@@ -49,7 +46,6 @@ impl Default for Config {
             click_after_warp: false,
             theme: Theme::default(),
             grid_min_span: 40.0,
-            atspi_budget: std::time::Duration::from_millis(400),
         }
     }
 }

@@ -51,8 +51,16 @@ it.
 
 ### What "strictly controlled" bought
 
-It has already changed the dependency set once: `ab_glyph`/`fontdb` were
-rejected because their underlying `ttf-parser` is declared unmaintained with no
-fixed release (RUSTSEC-2026-0192), and the font work moved to `swash` with the
-system's own `fc-match` for family resolution. Expect the same answer for the
-next crate that only looks convenient.
+It has already changed the dependency set twice, and both times the answer was
+"take it out":
+
+- `ab_glyph`/`fontdb` were rejected because their underlying `ttf-parser` is
+  declared unmaintained with no fixed release (RUSTSEC-2026-0192), and the font
+  work moved to `swash` with the system's own `fc-match` for family resolution.
+- The `atspi` feature was dropped after it proved to be 67 crates — more than the
+  rest of the project combined — for one optional capability that the test
+  machine could not even measure, and the origin of the project's only advisory.
+  The rule that a dependency which can be switched off stays off by default was
+  not enough on its own: a feature nobody builds is a feature nobody audits.
+
+Expect the same answer for the next crate that only looks convenient.

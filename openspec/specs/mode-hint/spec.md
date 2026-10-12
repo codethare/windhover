@@ -82,33 +82,6 @@ normal mode so the user can adjust.
 - **WHEN** the target is a lattice target
 - **THEN** the pointer lands within one logical pixel of the target's centre
 
-### Requirement: Element targets and degradation
-
-When an element-detection build is in use and the system's accessibility tree is
-available, hint mode SHALL use the centres of the bounding boxes of interactive
-elements as its targets, and SHALL fall back to the lattice source silently when
-the tree is empty, unavailable or too slow. The fallback SHALL not make hint mode
-fail or end the session.
-
-#### Scenario: Using element targets
-
-- **WHEN** a session runs a build with element detection enabled and the
-  accessibility tree returns candidate elements
-- **THEN** the overlay draws labels at the elements' centres rather than at
-  regular lattice points
-
-#### Scenario: An empty accessibility tree
-
-- **WHEN** the accessibility tree is available but returns no candidate elements
-- **THEN** the session uses the lattice source and keeps working, without a
-  blocking error
-
-#### Scenario: The accessibility service is unavailable
-
-- **WHEN** the system runs no accessibility bus service, or connecting times out
-- **THEN** the session gives up on the element source within a bounded time and
-  falls back to the lattice, with an upper bound on the total wait
-
 ### Requirement: Label editing and exit
 
 Hint mode SHALL provide an editing key that removes typed characters, and a key

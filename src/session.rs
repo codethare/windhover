@@ -11,7 +11,7 @@ use anyhow::Result;
 use xkbcommon::xkb;
 
 use crate::config::Config;
-use crate::hint::source;
+use crate::hint::lattice::Lattice;
 use crate::keys::{Action, Keysym};
 use crate::mode::grid::Grid;
 use crate::mode::hint::Hint;
@@ -63,8 +63,6 @@ pub struct Session {
     grid: Grid,
     hint: Hint,
     cell_labels: Vec<String>,
-    /// Where the overlay's output sits globally, for the element source.
-    output_origin: (i32, i32),
     /// Keys held down that repeat, with the time their next repeat is due.
     held: Vec<(Keysym, Instant)>,
     /// Whether anything the overlay draws has changed. Not every input produces
@@ -84,7 +82,6 @@ impl Session {
             grid: Grid::new(screen, 2, 2, 40.0),
             hint: Hint::default(),
             cell_labels: Vec::new(),
-            output_origin: (0, 0),
             held: Vec::new(),
             redraw: true,
         };
@@ -124,12 +121,6 @@ impl Session {
     /// Whether the overlay needs repainting, clearing the flag.
     pub fn take_redraw(&mut self) -> bool {
         std::mem::take(&mut self.redraw)
-    }
-
-    /// Tell the session where its output sits, which the element source needs to
-    /// translate global extents into overlay coordinates.
-    pub fn observe_origin(&mut self, origin: (i32, i32)) {
-        self.output_origin = origin;
     }
 
     fn step(&self) -> f64 {
@@ -298,7 +289,7 @@ impl Session {
         self.mode = mode;
         match mode {
             Mode::Grid => self.reset_grid(),
-            Mode::Hint => self.reset_hint(self.output_origin),
+            Mode::Hint => self.reset_hint(),
             Mode::Normal => {}
         }
     }
@@ -321,9 +312,11 @@ impl Session {
             .unwrap_or_default();
     }
 
-    fn reset_hint(&mut self, origin: (i32, i32)) {
-        let mut source = source::select(self.config.hint_cell, self.config.atspi_budget);
-        let points = source.targets(origin, self.screen);
+    fn reset_hint(&mut self) {
+        let lattice = Lattice {
+            cell: self.config.hint_cell,
+        };
+        let points = lattice.targets(self.screen);
         self.hint = Hint::new(points, &self.config.hint_charset);
     }
 
@@ -400,7 +393,6 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>) -> Result<()> {
 
     let mut session = Session::new(screen, config);
     session.observe_cursor(wl.state.cursor());
-    session.observe_origin(wl.output_origin());
     if start != Mode::Normal {
         // The mode flags hand the session over to the requested mode without
         // going through normal mode, so the mode state has to be primed.

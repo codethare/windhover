@@ -33,9 +33,6 @@ sh scripts/headless-check.sh niri
 | **river** 0.5.0-dev + tailrace | 26/26 | river is only the compositor; the window management policy comes from the window manager given to `-c` |
 | **niri** 26.04 | 26/26 | no headless backend of its own, so it is run nested inside the headless sway; it picks the winit backend and the output is a window there |
 
-The same suite runs against an `atspi` build with no accessibility bus present,
-which is what makes the fallback path a tested path rather than a claim.
-
 ## Things that differ per compositor
 
 These came out of the runs above; they are worth knowing before filing a bug.

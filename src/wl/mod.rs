@@ -81,15 +81,6 @@ impl State {
             .unwrap_or((0, 0))
     }
 
-    /// Where the overlay's output sits in the compositor's global space, which
-    /// is the coordinate space the accessibility tree reports in. Zero when the
-    /// compositor chose the output for us.
-    pub fn output_origin(&self) -> (i32, i32) {
-        self.output()
-            .map(|entry| (entry.info.logical_x, entry.info.logical_y))
-            .unwrap_or((0, 0))
-    }
-
     /// Buffer pixels per logical pixel, so the renderer can draw in logical
     /// units and still fill the physical buffer exactly.
     pub fn pixel_scale(&self) -> f32 {
@@ -456,10 +447,6 @@ impl Wayland {
         ring.present(index, &surface)?;
         self.conn.flush().context("flush frame")?;
         Ok(())
-    }
-
-    pub fn output_origin(&self) -> (i32, i32) {
-        self.state.output_origin()
     }
 
     pub fn take_keys(&mut self) -> Vec<KeyEvent> {
