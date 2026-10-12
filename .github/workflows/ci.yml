@@ -28,3 +28,12 @@ jobs:
       # xkbcommon and wayland-sys probe these with pkg-config.
       - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - run: cargo test --locked
+
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # sway brings swaymsg; DejaVu is one of the paths the overlay falls back to
+      # when fc-match has nothing to say about `sans-serif`.
+      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev sway fonts-dejavu-core
+      - run: sh scripts/headless-check.sh sway
