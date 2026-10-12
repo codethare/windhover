@@ -10,7 +10,7 @@ Three modes, one binary, no daemon:
 
 | Mode | Keys |
 |---|---|
-| **normal** | `h` `j` `k` `l` move · digits are a multiplier · `H` `M` `L` jump to left / middle / right edge · `m` `,` `.` left / middle / right click · `v` drag · `g` grid · `x` hint · `Esc` quit |
+| **normal** | `h` `j` `k` `l` move (hold to accelerate, `Ctrl` for double) · digits are a multiplier · `H` `M` `L` jump to left / middle / right edge · `m` `,` `.` left / middle / right click · `v` drag · `g` grid · `x` hint · `Esc` quit |
 | **grid** | `q` `w` `a` `s` pick a quadrant · repeat to shrink · `h` `j` `k` `l` pan the region · `BackSpace` undo · `Return` warp · `Space` warp and click · `Esc` quit |
 | **hint** | type a label · `BackSpace` edit (or return to normal when empty) · `Esc` quit |
 

@@ -373,6 +373,10 @@ cursor_check "normal: three steps right of the left edge" --normal \
   "mods:shift tap:h mods: tap:l tap:l tap:l" "3*s" -
 cursor_check "normal: a 10x prefix" --normal \
   "mods:shift tap:h mods: tap:1 tap:0 tap:l" "10*s" -
+# The modifier only reaches the session through the compositor's own modifier
+# events, so this is the check that the fast step is wired up.
+cursor_check "normal: the fast modifier doubles the step" --normal \
+  "mods:shift tap:h mods: mods:ctrl tap:l mods:" "2*s" -
 # `W - 1`: the session addresses the last pixel column, not one past it.
 cursor_check "normal: jump to the right edge" --normal \
   "mods:shift tap:l mods:" "W-1" -

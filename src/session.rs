@@ -30,6 +30,13 @@ const REPEAT_DELAY: Duration = Duration::from_millis(300);
 const REPEAT_INTERVAL: Duration = Duration::from_millis(40);
 /// Nothing above this matters: repeats are bounded so a stuck key cannot spin.
 const REPEAT_CEILING: Duration = Duration::from_millis(500);
+/// A held key's step grows by one factor for every interval it stays down, and
+/// stops at the limit: a tap stays precise and a long hold crosses the screen,
+/// but neither can run away.
+const GROWTH_INTERVAL: Duration = Duration::from_millis(200);
+const GROWTH_LIMIT: f64 = 4.0;
+/// Movement with the fast modifier covers this many steps in one press.
+const FAST_STEP: f64 = 2.0;
 
 /// Set from a signal handler, acted on by the session loop. Doing the teardown
 /// in the loop rather than in the handler keeps the handler async-signal-safe
@@ -54,6 +61,24 @@ fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::Relaxed)
 }
 
+/// A movement key that is down. Its step grows with how long it has been down,
+/// and the fast modifier is remembered from the press so that a repeat does not
+/// depend on the modifier still being down.
+struct Held {
+    keysym: Keysym,
+    next: Instant,
+    pressed_at: Instant,
+    fast: bool,
+}
+
+/// What a movement key covers right now, given the modifier it went down with
+/// and how long it has been down.
+fn growth(fast: bool, held: Duration) -> f64 {
+    let steps = (held.as_millis() / GROWTH_INTERVAL.as_millis()) as f64;
+    let fast = if fast { FAST_STEP } else { 1.0 };
+    fast * (1.0 + steps).min(GROWTH_LIMIT)
+}
+
 pub struct Session {
     mode: Mode,
     cursor: (f64, f64),
@@ -64,7 +89,7 @@ pub struct Session {
     hint: Hint,
     cell_labels: Vec<String>,
     /// Keys held down that repeat, with the time their next repeat is due.
-    held: Vec<(Keysym, Instant)>,
+    held: Vec<Held>,
     /// Whether anything the overlay draws has changed. Not every input produces
     /// an effect — typing a digit or a hint label character changes what is on
     /// screen and nothing else — so the driver cannot infer this from effects.
@@ -135,9 +160,13 @@ impl Session {
         }
     }
 
-    pub fn on_press(&mut self, keysym: Keysym, now: Instant) -> Vec<Effect> {
+    pub fn on_press(&mut self, keysym: Keysym, fast: bool, now: Instant) -> Vec<Effect> {
         if let Some(action) = self.config.bindings.table(self.mode).get(&keysym).copied() {
-            return self.act(action, now);
+            let effects = self.act(action, now, fast, Duration::ZERO);
+            // A press waits out the delay before it repeats; `tick` keeps only
+            // the shorter gap from then on.
+            self.schedule(action, now, fast, now, REPEAT_DELAY);
+            return effects;
         }
 
         // Things that are not named actions still produce effects: a digit is a
@@ -180,27 +209,33 @@ impl Session {
     }
 
     pub fn on_release(&mut self, keysym: Keysym) {
-        self.held.retain(|(held, _)| *held != keysym);
+        self.held.retain(|entry| entry.keysym != keysym);
     }
 
     /// Effects that have come due since the last turn: held movement keys.
     pub fn tick(&mut self, now: Instant) -> Vec<Effect> {
         let mut due = Vec::new();
-        for (keysym, next) in &mut self.held {
-            if *next <= now {
+        for entry in &mut self.held {
+            if entry.next <= now {
                 // Cap the schedule rather than catching up: after a stall the
                 // cursor should move once, not a hundred times.
-                let late = now.saturating_duration_since(*next).min(REPEAT_CEILING);
-                *next = now + REPEAT_INTERVAL.saturating_sub(late);
-                due.push(*keysym);
+                let late = now.saturating_duration_since(entry.next).min(REPEAT_CEILING);
+                entry.next = now + REPEAT_INTERVAL.saturating_sub(late);
+                due.push((
+                    entry.keysym,
+                    entry.fast,
+                    entry.pressed_at,
+                    now.saturating_duration_since(entry.pressed_at),
+                ));
             }
         }
         let mut effects = Vec::new();
-        for keysym in due {
-            // Routed through `act` so the repeat reschedules itself and the
-            // cursor update happens in one place.
+        for (keysym, fast, pressed_at, held) in due {
             if let Some(action) = self.config.bindings.normal.get(&keysym).copied() {
-                effects.extend(self.act(action, now));
+                // The entry is rescheduled only if `act` leaves it alone, and
+                // `pressed_at` keeps the growth counting from the press.
+                effects.extend(self.act(action, now, fast, held));
+                self.schedule(action, now, fast, pressed_at, REPEAT_INTERVAL);
             }
         }
         effects
@@ -211,11 +246,43 @@ impl Session {
     pub fn time_to_next_repeat(&self, now: Instant) -> Option<Duration> {
         self.held
             .iter()
-            .map(|(_, next)| next.saturating_duration_since(now))
+            .map(|entry| entry.next.saturating_duration_since(now))
             .min()
     }
 
-    fn act(&mut self, action: Action, now: Instant) -> Vec<Effect> {
+    /// Remember that a repeatable action's key is down and when it should next
+    /// fire. A non-repeatable action, or a key bound outside normal mode, has
+    /// nothing to schedule.
+    fn schedule(
+        &mut self,
+        action: Action,
+        now: Instant,
+        fast: bool,
+        pressed_at: Instant,
+        delay: Duration,
+    ) {
+        if self.mode != Mode::Normal || !is_repeatable(action) {
+            return;
+        }
+        let keysym = self
+            .config
+            .bindings
+            .normal
+            .iter()
+            .find(|(_, bound)| **bound == action)
+            .map(|(keysym, _)| *keysym);
+        if let Some(keysym) = keysym {
+            self.held.retain(|entry| entry.keysym != keysym);
+            self.held.push(Held {
+                keysym,
+                next: now + delay,
+                pressed_at,
+                fast,
+            });
+        }
+    }
+
+    fn act(&mut self, action: Action, now: Instant, fast: bool, held: Duration) -> Vec<Effect> {
         if action == Action::Quit {
             self.held.clear();
             return vec![Effect::Exit];
@@ -223,24 +290,18 @@ impl Session {
 
         let context = self.context();
         let effects = match self.mode {
-            Mode::Normal => self.normal.on_action(action, &context),
+            Mode::Normal => {
+                // Only the step is scaled: grid and hint place the pointer
+                // absolutely, so the growth has nothing to act on there.
+                let scaled = Context {
+                    step: context.step * growth(fast, held),
+                    ..context
+                };
+                self.normal.on_action(action, &scaled)
+            }
             Mode::Grid => self.grid.on_action(action, &context),
             Mode::Hint => self.hint.on_action(action),
         };
-
-        if self.mode == Mode::Normal && is_repeatable(action) {
-            let keysym = self
-                .config
-                .bindings
-                .normal
-                .iter()
-                .find(|(_, bound)| **bound == action)
-                .map(|(keysym, _)| *keysym);
-            if let Some(keysym) = keysym {
-                self.held.retain(|(held, _)| *held != keysym);
-                self.held.push((keysym, now + REPEAT_DELAY));
-            }
-        }
 
         self.apply(&effects);
         effects
@@ -421,7 +482,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>) -> Result<()> {
         let mut effects = Vec::new();
         for key in wl.take_keys() {
             if key.pressed {
-                effects.extend(session.on_press(key.keysym, now));
+                effects.extend(session.on_press(key.keysym, key.fast, now));
             } else {
                 session.on_release(key.keysym);
             }
@@ -484,7 +545,12 @@ mod tests {
 
     fn press(session: &mut Session, name: &str) -> Vec<Effect> {
         let keysym = parse_key(name).unwrap();
-        session.on_press(keysym, Instant::now())
+        session.on_press(keysym, false, Instant::now())
+    }
+
+    fn press_with(session: &mut Session, name: &str, fast: bool, at: Instant) -> Vec<Effect> {
+        let keysym = parse_key(name).unwrap();
+        session.on_press(keysym, fast, at)
     }
 
     #[test]
@@ -616,20 +682,20 @@ mod tests {
     }
 
     #[test]
-    fn a_held_movement_key_repeats_after_the_delay() {
-        let mut session = session();
+    fn a_held_movement_key_repeats_after_the_delay() {        let mut session = session();
         let start = Instant::now();
         let keysym = parse_key("l").unwrap();
-        session.on_press(keysym, start);
+        session.on_press(keysym, false, start);
         assert_eq!(session.cursor(), (660.0, 360.0));
 
         assert!(session.tick(start).is_empty(), "repeated before the delay");
         let later = start + REPEAT_DELAY + Duration::from_millis(1);
+        // Held for 300 ms, so the step has grown by one factor already.
         assert_eq!(
             session.tick(later),
-            vec![Effect::Move { dx: 20.0, dy: 0.0 }]
+            vec![Effect::Move { dx: 40.0, dy: 0.0 }]
         );
-        assert_eq!(session.cursor(), (680.0, 360.0));
+        assert_eq!(session.cursor(), (700.0, 360.0));
 
         session.on_release(keysym);
         assert!(
@@ -644,25 +710,23 @@ mod tests {
         let start = Instant::now();
         press(&mut session, "g");
         let keysym = parse_key("w").unwrap();
-        session.on_press(keysym, start);
+        session.on_press(keysym, false, start);
         let later = start + REPEAT_DELAY + Duration::from_millis(1);
         assert!(session.tick(later).is_empty());
     }
 
     #[test]
-    fn the_next_repeat_is_scheduled_only_while_a_key_is_held() {
-        let mut session = session();
+    fn the_next_repeat_is_scheduled_only_while_a_key_is_held() {        let mut session = session();
         let start = Instant::now();
         assert_eq!(session.time_to_next_repeat(start), None);
-        session.on_press(parse_key("j").unwrap(), start);
+        session.on_press(parse_key("j").unwrap(), false, start);
         assert_eq!(session.time_to_next_repeat(start), Some(REPEAT_DELAY));
         session.on_release(parse_key("j").unwrap());
         assert_eq!(session.time_to_next_repeat(start), None);
     }
 
     #[test]
-    fn every_visible_change_asks_for_a_redraw() {
-        let mut session = session();
+    fn every_visible_change_asks_for_a_redraw() {        let mut session = session();
         assert!(session.take_redraw(), "the first frame has to be drawn");
         assert!(!session.take_redraw());
 
@@ -711,5 +775,73 @@ mod tests {
             session.switch_to(start);
             assert_eq!(press(&mut session, "Escape"), vec![Effect::Exit]);
         }
+    }
+
+    /// The distance every repeat covered while `l` was held from `start`, one
+    /// entry per turn of the loop.
+    fn held_steps(fast: bool, turns: u32) -> Vec<f64> {
+        let mut session = session();
+        let start = Instant::now();
+        press_with(&mut session, "l", fast, start);
+        let mut steps = Vec::new();
+        for turn in 1..=turns {
+            let at = start + REPEAT_DELAY + REPEAT_INTERVAL * turn;
+            for effect in session.tick(at) {
+                if let Effect::Move { dx, .. } = effect {
+                    steps.push(dx);
+                }
+            }
+        }
+        steps
+    }
+
+    #[test]
+    fn a_held_key_covers_more_ground_the_longer_it_is_held() {
+        let steps = held_steps(false, 12);
+        assert!(steps.len() > 6, "only {steps:?} repeats");
+        assert!(
+            steps.windows(2).all(|pair| pair[0] <= pair[1]),
+            "the step shrank: {steps:?}"
+        );
+        assert!(steps[0] < steps[steps.len() - 1], "the step never grew");
+    }
+
+    #[test]
+    fn the_growth_stops_at_its_limit() {
+        let steps = held_steps(false, 60);
+        let ceiling = 20.0 * GROWTH_LIMIT;
+        assert_eq!(*steps.last().unwrap(), ceiling, "{steps:?}");
+        assert!(steps.iter().all(|step| *step <= ceiling), "{steps:?}");
+    }
+
+    #[test]
+    fn the_fast_modifier_doubles_the_step() {
+        let mut session = session();
+        press_with(&mut session, "l", true, Instant::now());
+        assert_eq!(session.cursor(), (680.0, 360.0));
+    }
+
+    #[test]
+    fn the_fast_modifier_doubles_what_a_held_key_covers() {
+        let plain = held_steps(false, 12);
+        let fast = held_steps(true, 12);
+        assert_eq!(plain.len(), fast.len());
+        for (plain, fast) in plain.iter().zip(&fast) {
+            assert_eq!(*fast, plain * FAST_STEP, "{plain} did not double");
+        }
+    }
+
+    #[test]
+    fn a_press_after_a_release_starts_from_the_base_step() {
+        let mut session = session();
+        let start = Instant::now();
+        let keysym = parse_key("l").unwrap();
+        press_with(&mut session, "l", false, start);
+        session.tick(start + REPEAT_DELAY + REPEAT_INTERVAL * 8);
+        session.on_release(keysym);
+
+        let before = session.cursor().0;
+        press_with(&mut session, "l", false, Instant::now());
+        assert_eq!(session.cursor().0 - before, 20.0);
     }
 }

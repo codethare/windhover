@@ -121,7 +121,7 @@ is what lets the shift level of a movement key jump to an edge.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `step` | derived as `output_height / 36`, at least 8 | Normal-mode step in logical pixels |
+| `step` | derived as `output_height / 36`, at least 8 | Normal-mode step in logical pixels. A held direction key grows this up to four times, by one factor every 200 ms, and `Ctrl` with a direction doubles it |
 | `grid_columns` `grid_rows` | `2` `2` | Partition of the grid region |
 | `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise |
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |

@@ -17,11 +17,17 @@ use super::State;
 /// wrong key, and every code below 9 reads no key at all.
 const XKB_KEYCODE_OFFSET: u32 = 8;
 
+/// The modifier that scales a movement. The keysym cannot show it: a modifier
+/// does not change which symbol a letter resolves to.
+pub const FAST_MODIFIER: &str = "Control";
+
 /// One keyboard transition, already resolved through the active xkb layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
     pub keysym: xkb::Keysym,
     pub pressed: bool,
+    /// Whether the fast modifier was down when the key was pressed.
+    pub fast: bool,
 }
 
 #[derive(Default)]
@@ -112,7 +118,13 @@ impl Keyboard {
                 if let Some(xkb_state) = &self.state {
                     let keysym =
                         xkb_state.key_get_one_sym(xkb::Keycode::new(key + XKB_KEYCODE_OFFSET));
-                    self.events.push(KeyEvent { keysym, pressed });
+                    let fast =
+                        xkb_state.mod_name_is_active(FAST_MODIFIER, xkb::STATE_MODS_EFFECTIVE);
+                    self.events.push(KeyEvent {
+                        keysym,
+                        pressed,
+                        fast,
+                    });
                 }
             }
             wl_keyboard::Event::Modifiers {
@@ -248,6 +260,7 @@ mod tests {
             vec![KeyEvent {
                 keysym: parse_key("h").unwrap(),
                 pressed: true,
+                fast: false,
             }]
         );
         assert_eq!(
@@ -255,6 +268,7 @@ mod tests {
             vec![KeyEvent {
                 keysym: parse_key("Escape").unwrap(),
                 pressed: true,
+                fast: false,
             }]
         );
     }
