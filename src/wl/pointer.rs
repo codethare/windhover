@@ -60,19 +60,21 @@ impl VirtualPointer {
         self.proxy.frame();
     }
 
-    /// `axis_source` plus `axis_discrete`: a bare `axis` is frequently ignored
-    /// by compositors that expect wheel events to carry a notch count.
+    /// `axis` is the event that carries the scroll. `axis_discrete` is only
+    /// extra information about the same axis value, and the protocol has it
+    /// never occur alone: wlroots drops a discrete event with no `axis` behind
+    /// it, and Smithay adds the two values together and scrolls twice as far.
     /// Positive steps scroll down, matching the sign convention of `wl_pointer`.
     pub fn scroll(&self, steps: i32) {
         if steps == 0 {
             return;
         }
+        let value = steps as f64 * 15.0;
         self.proxy.axis_source(wl_pointer::AxisSource::Wheel);
-        self.proxy.axis_discrete(
+        self.proxy.axis(
             timestamp_ms(),
             wl_pointer::Axis::VerticalScroll,
-            steps as f64 * 15.0,
-            steps,
+            value,
         );
         self.proxy.frame();
     }

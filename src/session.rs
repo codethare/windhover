@@ -445,7 +445,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>) -> Result<()> {
                     // reach the window underneath.
                     wl.without_overlay(|wl| wl.click(button))?;
                 }
-                Effect::Scroll { steps } => wl.scroll(steps)?,
+                Effect::Scroll { steps } => wl.without_overlay(|wl| wl.scroll(steps))?,
                 Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
                 Effect::Switch(_) => {}
                 Effect::Exit => exit = true,

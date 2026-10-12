@@ -419,6 +419,32 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: scrolling reaches what is under the overlay"
+# Same probe on the bottom layer: a wheel event can only reach it if the session
+# both sent one and got its overlay out of the way.
+session_start --normal
+if session_alive; then
+  probe_start "--layer bottom"
+  inject "tap:e"
+  probe_wait
+  AXIS=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f2)
+  VALUE=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f3)
+  if [ -z "$AXIS" ]; then
+    fail "the scroll never arrived below the overlay (probe output: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
+  elif [ "$AXIS" != "0" ]; then
+    fail "the scroll arrived on axis $AXIS, expected 0 (vertical)"
+  elif close_enough "$VALUE" 15; then
+    pass "the wheel reached the layer under the overlay"
+  else
+    fail "the scroll arrived as $VALUE, expected 15"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: configuration"
 # session_start_config <config path> <mode flag>
 session_start_config() {

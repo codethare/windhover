@@ -44,6 +44,9 @@ struct State {
     configured: Option<(u32, u32)>,
     position: Option<(f64, f64)>,
     click: Option<(u32, f64, f64)>,
+    /// The last scroll the probe was sent: the axis number and its value, so a
+    /// check can tell a wheel event that reached it from one that did not.
+    axis: Option<(u32, f64)>,
     /// When the position last changed, so the probe can report as soon as the
     /// session stops moving rather than always waiting out the timeout.
     motion_at: Option<Instant>,
@@ -79,6 +82,11 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                         state.position.map(|p| p.0).unwrap_or_default(),
                         state.position.map(|p| p.1).unwrap_or_default(),
                     ));
+                }
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => {
+                if let wayland_client::WEnum::Value(axis) = axis {
+                    state.axis.get_or_insert((axis as u32, value));
                 }
             }
             _ => {}
@@ -288,6 +296,9 @@ fn main() {
             println!("{x} {y} {width} {height}");
             if let Some((button, at_x, at_y)) = state.click {
                 println!("{button} {at_x} {at_y}");
+            }
+            if let Some((axis, value)) = state.axis {
+                println!("axis {axis} {value}");
             }
         }
         None => {

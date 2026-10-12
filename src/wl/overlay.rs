@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rustix::fs::{memfd_create, ftruncate, MemfdFlags};
 use rustix::io::pwrite;
 use wayland_client::{
-    protocol::{wl_buffer, wl_compositor, wl_output, wl_shm, wl_surface},
+    protocol::{wl_buffer, wl_compositor, wl_output, wl_region, wl_shm, wl_surface},
     Dispatch, QueueHandle,
 };
 use wayland_protocols::wp::fractional_scale::v1::client::{
@@ -170,6 +170,9 @@ pub struct Overlay {
     fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     /// (width, height) from `zwlr_layer_surface_v1::configure`, in logical units.
     configure: Option<(u32, u32)>,
+    /// An empty region, kept so a click or a scroll can be sent past the
+    /// overlay without rebuilding the surface around it.
+    empty_region: wl_region::WlRegion,
     /// 120ths of a logical pixel, from `wp_fractional_scale_v1`.
     preferred_scale: Option<u32>,
     scale_warned: bool,
@@ -185,6 +188,7 @@ impl Overlay {
         qh: &QueueHandle<State>,
     ) -> Self {
         let surface = compositor.create_surface(qh, ());
+        let empty_region = compositor.create_region(qh, ());
         let viewport = viewporter.map(|v| v.get_viewport(&surface, qh, ()));
         let fractional = fractional.map(|m| m.get_fractional_scale(&surface, qh, ()));
         let layer_surface = layer_shell.get_layer_surface(
@@ -213,9 +217,22 @@ impl Overlay {
             viewport,
             fractional,
             configure: None,
+            empty_region,
             preferred_scale: None,
             scale_warned: false,
         }
+    }
+
+    /// Whether the overlay takes pointer events, which decide where a click or a
+    /// scroll lands. The surface stays mapped either way, so the keyboard grab
+    /// and the drawn frame survive: giving both up is what a rebuild would cost.
+    pub fn capture_pointer(&self, capture: bool) {
+        match capture {
+            // `None` is the whole surface, which is also the default.
+            true => self.surface.set_input_region(None),
+            false => self.surface.set_input_region(Some(&self.empty_region)),
+        }
+        self.surface.commit();
     }
 
     pub fn is_configured(&self) -> bool {

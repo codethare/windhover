@@ -12,8 +12,8 @@ use anyhow::{anyhow, Context, Result};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use wayland_client::globals::{registry_queue_init, BindError, GlobalList, GlobalListContents};
 use wayland_client::protocol::{
-    wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface,
+    wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
 use wayland_client::{
     delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle,
@@ -51,7 +51,10 @@ pub struct State {
     pub ring: Option<BufferRing>,
     pub output_index: Option<usize>,
     pub keys: Keyboard,
+    /// Where the compositor last reported the pointer, and where it was last
+    /// asked to put it. The two differ until the compositor answers.
     pub pointer_pos: Option<(f64, f64)>,
+    pub sent_pos: Option<(f64, f64)>,
     pub closed: bool,
     pub keyboard_ready: bool,
     pub pointer_ready: bool,
@@ -222,6 +225,7 @@ impl Wayland {
             output_index: None,
             keys: Keyboard::default(),
             pointer_pos: None,
+            sent_pos: None,
             closed: false,
             keyboard_ready: false,
             pointer_ready: false,
@@ -454,6 +458,7 @@ impl Wayland {
     }
 
     pub fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
+        self.state.sent_pos = Some((x, y));
         let (w, h) = self.state.logical_size();
         if let Some(pointer) = &self.state.vp {
             pointer.move_absolute(x, y, w.max(1), h.max(1));
@@ -483,37 +488,33 @@ impl Wayland {
         self.button(button, false)
     }
 
-    /// Drop the overlay for the duration of a click so that the button event
-    /// reaches the window underneath instead of being swallowed by our surface.
+    /// Stop the overlay taking pointer events for the duration of an action, so
+    /// a click or a scroll reaches the window underneath. The surface is left
+    /// mapped: destroying it would drop the keyboard grab with it, and the
+    /// point of the overlay staying up is that the session keeps receiving keys.
     pub fn without_overlay<T>(&mut self, action: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        // The position the compositor was last asked for, not the one it last
+        // reported: a warp in the same batch has not been answered yet.
+        let (x, y) = match self.state.sent_pos {
+            Some(sent) => sent,
+            None => self.state.cursor(),
+        };
         let overlay = self
             .state
             .overlay
-            .take()
+            .as_ref()
             .ok_or_else(|| anyhow!("no overlay to suspend"))?;
-        overlay.destroy();
+        overlay.capture_pointer(false);
+        // A compositor rebases pointer focus on motion, not on an input region
+        // change, so the position is sent again now that the overlay has stopped
+        // taking events. Without it the click or scroll still lands on us.
+        self.move_pointer(x, y)?;
         self.roundtrip()?;
 
         let result = action(self);
 
-        let output = self
-            .state
-            .output_index
-            .and_then(|i| self.state.outputs.get(i));
-        let restored = Overlay::create(
-            &self.state.compositor,
-            &self.state.layer_shell,
-            self.state.viewporter.as_ref(),
-            self.state.fractional_manager.as_ref(),
-            output.and_then(|entry| entry.output.as_ref()),
-            &self.qh,
-        );
-        self.state.overlay = Some(restored);
-        for _ in 0..16 {
-            self.roundtrip()?;
-            if self.state.overlay.as_ref().is_some_and(Overlay::is_configured) {
-                break;
-            }
+        if let Some(overlay) = self.state.overlay.as_ref() {
+            overlay.capture_pointer(true);
         }
         self.roundtrip()?;
 
@@ -580,6 +581,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
 delegate_noop!(State: ignore wl_compositor::WlCompositor);
 delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
+delegate_noop!(State: ignore wl_region::WlRegion);
 delegate_noop!(State: ignore wl_surface::WlSurface);
 delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(State: ignore zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1);
