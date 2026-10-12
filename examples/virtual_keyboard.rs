@@ -36,8 +36,8 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 use xkbcommon::xkb;
 
-/// evdev codes for the keys the checks use. `wl_keyboard` and the virtual
-/// keyboard both carry the evdev code plus 8.
+/// evdev codes for the keys the checks use. `wl_keyboard` carries the raw
+/// evdev code; the `+ 8` into the XKB keycode is the receiving client's job.
 fn keycode(name: &str) -> Option<u32> {
     let code = match name {
         "Escape" => 1,
@@ -92,7 +92,7 @@ fn keycode(name: &str) -> Option<u32> {
         "Super_L" => 125,
         _ => return None,
     };
-    Some(code + 8)
+    Some(code)
 }
 
 fn modifier_mask(name: &str) -> Option<u32> {

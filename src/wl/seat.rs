@@ -12,6 +12,11 @@ use xkbcommon::xkb;
 
 use super::State;
 
+/// Wayland reports the raw evdev code, and xkbcommon indexes keys by the XKB
+/// code, which sits eight above it. Resolving an evdev code directly reads the
+/// wrong key, and every code below 9 reads no key at all.
+const XKB_KEYCODE_OFFSET: u32 = 8;
+
 /// One keyboard transition, already resolved through the active xkb layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
@@ -105,7 +110,8 @@ impl Keyboard {
                     self.down.remove(&key);
                 }
                 if let Some(xkb_state) = &self.state {
-                    let keysym = xkb_state.key_get_one_sym(xkb::Keycode::new(key));
+                    let keysym =
+                        xkb_state.key_get_one_sym(xkb::Keycode::new(key + XKB_KEYCODE_OFFSET));
                     self.events.push(KeyEvent { keysym, pressed });
                 }
             }
@@ -185,5 +191,71 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::parse_key;
+
+    /// Keys, spelled out instead of included so the test needs no system
+    /// xkeyboard-config data. `<ESC>` is xkb keycode 9, `<AD11>` is 35 and
+    /// `<AC06>` is 43, which are evdev 1, 27 and 35.
+    const KEYMAP: &str = concat!(
+        "xkb_keymap {\n",
+        "  xkb_keycodes \"t\" { minimum = 8; maximum = 255; <ESC> = 9; <AD11> = 35; \
+         <AC06> = 43; };\n",
+        "  xkb_types \"t\" { type \"ONE_LEVEL\" { modifiers = None; map[None] = Level1; \
+         level_name[Level1] = \"Any\"; }; };\n",
+        "  xkb_compat \"t\" { };\n",
+        "  xkb_symbols \"t\" { key <ESC> { [ Escape ] }; key <AD11> { [ bracketright ] }; \
+         key <AC06> { [ h ] }; };\n",
+        "};\n"
+    );
+
+    fn keyboard() -> Keyboard {
+        let fd = rustix::fs::memfd_create("keymap", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        rustix::io::write(&fd, KEYMAP.as_bytes()).unwrap();
+        let mut keyboard = Keyboard::default();
+        keyboard.load_keymap(
+            WEnum::Value(wl_keyboard::KeymapFormat::XkbV1),
+            fd,
+            KEYMAP.len() as u32,
+        );
+        keyboard
+    }
+
+    /// `evdev` is what the compositor sends; the offset into the xkb keycode is
+    /// the client's to apply. Without it a key resolves to whichever key sits
+    /// eight codes away, and anything below 9 resolves to nothing at all, which
+    /// is where Escape lives.
+    fn press(keyboard: &mut Keyboard, evdev: u32) -> Vec<KeyEvent> {
+        keyboard.handle(wl_keyboard::Event::Key {
+            serial: 0,
+            time: 0,
+            key: evdev,
+            state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+        });
+        keyboard.drain()
+    }
+
+    #[test]
+    fn key_events_carry_the_keysym_the_evdev_code_names() {
+        let mut keyboard = keyboard();
+        assert_eq!(
+            press(&mut keyboard, 35),
+            vec![KeyEvent {
+                keysym: parse_key("h").unwrap(),
+                pressed: true,
+            }]
+        );
+        assert_eq!(
+            press(&mut keyboard, 1),
+            vec![KeyEvent {
+                keysym: parse_key("Escape").unwrap(),
+                pressed: true,
+            }]
+        );
     }
 }
