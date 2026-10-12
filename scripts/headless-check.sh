@@ -8,7 +8,7 @@
 #
 # Usage: scripts/headless-check.sh [sway|river]
 #
-# Requires: a built windhover and examples/virtual_keyboard, plus the compositor.
+# Builds windhover and the helper examples, then needs the compositor.
 # sway also needs swaymsg. river needs a river-window-management-v1 window
 # manager; point TAILRACE at one (defaults to the usual local checkout).
 set -eu
@@ -43,7 +43,7 @@ fail() {
 
 echo "building"
 cargo build --quiet --manifest-path "$ROOT/Cargo.toml" \
-  --example virtual_keyboard --example cursor_probe
+  --bin windhover --example virtual_keyboard --example cursor_probe
 WINDHOVER="$ROOT/target/debug/windhover"
 INJECTOR="$ROOT/target/debug/examples/virtual_keyboard"
 PROBE="$ROOT/target/debug/examples/cursor_probe"
