@@ -505,19 +505,24 @@ impl Wayland {
             .as_ref()
             .ok_or_else(|| anyhow!("no overlay to suspend"))?;
         overlay.capture_pointer(false);
-        // A compositor rebases pointer focus on motion, not on an input region
-        // change, so the position is sent again now that the overlay has stopped
-        // taking events. Without it the click or scroll still lands on us.
+        // A compositor re-runs its pointer hit test on motion, not on an input
+        // region change, so the position is sent again now that the overlay has
+        // stopped taking events. Without it the click or scroll lands on us.
         self.move_pointer(x, y)?;
         self.roundtrip()?;
 
         let result = action(self);
+        // Let the compositor act on the click or scroll while the overlay is
+        // still out of the way. Restoring the input region in the same batch
+        // leaves whether the event was delivered to chance.
+        let acknowledged = self.roundtrip();
 
         if let Some(overlay) = self.state.overlay.as_ref() {
             overlay.capture_pointer(true);
         }
         self.roundtrip()?;
 
+        acknowledged?;
         result
     }
 

@@ -403,9 +403,9 @@ if session_alive; then
   set -- $(cat "$RUNTIME/probe.out")
   W=${3:-0}
   H=${4:-0}
-  BUTTON=$(sed -n '2p' "$RUNTIME/probe.out" | cut -d' ' -f1)
-  CLICK_X=$(sed -n '2p' "$RUNTIME/probe.out" | cut -d' ' -f2)
-  CLICK_Y=$(sed -n '2p' "$RUNTIME/probe.out" | cut -d' ' -f3)
+  BUTTON=$(grep '^click ' "$RUNTIME/probe.out" | head -1 | cut -d' ' -f2)
+  CLICK_X=$(grep '^click ' "$RUNTIME/probe.out" | head -1 | cut -d' ' -f3)
+  CLICK_Y=$(grep '^click ' "$RUNTIME/probe.out" | head -1 | cut -d' ' -f4)
   if [ -z "$BUTTON" ]; then
     fail "the click never arrived below the overlay (probe output: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
   elif [ "$BUTTON" != "272" ]; then
@@ -415,6 +415,55 @@ if session_alive; then
     pass "the left button reached the layer under the overlay at $CLICK_X $CLICK_Y"
   else
     fail "the click landed at $CLICK_X $CLICK_Y, wanted $(want "$W" "$H" "W*3/4") $(want "$W" "$H" "H/4")"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
+echo "check: every mouse button works from normal mode"
+# The click-through check above uses grid mode's warp-and-click, so the three
+# normal-mode button keys need their own check: 272 is BTN_LEFT, 273 BTN_RIGHT
+# and 274 BTN_MIDDLE.
+session_start --normal
+if session_alive; then
+  probe_start "--layer bottom"
+  inject "tap:l tap:m tap:comma tap:period"
+  probe_wait
+  BUTTONS=$(grep '^click ' "$RUNTIME/probe.out" | cut -d' ' -f2 | tr '\n' ' ')
+  if [ "$BUTTONS" = "272 274 273 " ]; then
+    pass "m, , and . sent BTN_LEFT, BTN_MIDDLE and BTN_RIGHT"
+  else
+    fail "the button keys sent '$BUTTONS', expected '272 274 273 ' (probe output: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
+echo "check: a click reaches an ordinary window, not only a layer surface"
+# A real xdg-shell toplevel. Layer surfaces live in the overlay stack, so the
+# check above is not evidence that a click reaches an application window.
+session_start --normal
+if session_alive; then
+  "$PROBE" --toplevel --min-lifetime 2500 --settle 900 >"$RUNTIME/toplevel.out" 2>&1 &
+  TOPLEVEL_PID=$!
+  # Long enough for the window to be mapped and tiled: the compositor sends a
+  # `0x0` configure first, then the size it actually wants.
+  sleep 1.2
+  # Off the left edge and clear of the title bar: a click on a border or a title
+  # bar belongs to the window manager rather than the window, and on river the
+  # window is a tiled column rather than the whole output.
+  inject "mods:shift tap:h mods: tap:l tap:l tap:l tap:j tap:j tap:m"
+  wait "$TOPLEVEL_PID" 2>/dev/null || true
+  if grep -q '^click 272 ' "$RUNTIME/toplevel.out"; then
+    pass "the left click reached the window"
+  else
+    fail "the left click did not reach the window (probe output: $(cat "$RUNTIME/toplevel.out" | tr '\n' '|'))"
   fi
   inject "tap:Escape"
   sleep 0.4
