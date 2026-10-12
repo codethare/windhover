@@ -67,6 +67,9 @@ Every one of them comes from crates.io with a checksum in `Cargo.lock`, which is
 what makes "no `git = ` or `path = ` dependencies" worth enforcing: it is the
 only thing anchoring those scripts to a reviewed artefact.
 
+`deny.toml` names exactly these eight crates, so the list above is a rule the
+check enforces rather than a record that drifts.
+
 ## What the gate caught
 
 The gate had a bug, and the bug hid a real advisory. It read the graph into a
@@ -86,8 +89,8 @@ both are fixed in `quick-xml` 0.41.0. The default build was never affected: only
 
 The fix, in two parts:
 
-- `scripts/audit-deps.py` now keeps a set of `(name, version)` pairs instead of a
-  name-keyed mapping, so a crate at two versions is checked at both.
+- the audit of the time was changed to keep a set of `(name, version)` pairs
+  instead of a name-keyed mapping, so a crate at two versions is checked at both.
 - `zbus_xml` 5.2.1 dropped `quick-xml` for `winnow`, so raising `rust-version` to
   `1.87` and running `cargo update` removed `quick-xml` 0.38.4 from the graph.
   `quick-xml` 0.41.0 (through `wayland-scanner`) stays and is patched.
@@ -98,18 +101,31 @@ The fix, in two parts:
 ## The check
 
 ```sh
-python3 scripts/audit-deps.py
+cargo deny check advisories bans
 ```
 
-The script:
+The gate is [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) against
+[`deny.toml`](../deny.toml), which holds the policy:
 
-1. clones the RustSec database into `$RUSTSEC_DB` (default `/tmp/advisory-db`)
-   when it is not already there;
-2. reads the whole graph, opt-in features included, with
-   `cargo metadata --all-features`;
-3. compares every package against the `patched` and `unaffected` ranges in
-   `advisory-db/crates/<name>/RUSTSEC-*.md`;
-4. lists any advisory no patched release covers, and exits non-zero.
+1. the graph is resolved with every feature, because a transitive dependency that
+   only an opt-in feature brings in is still in the gate;
+2. a yanked version, an unmaintained crate anywhere in the graph, and an unsound
+   crate anywhere in the graph are errors — the tool's own defaults are weaker in
+   each case (a warning, and direct dependencies only);
+3. `bans.build.allow-build-scripts` names the eight crates with a build script,
+   so a dependency that brings a new one fails the check and prints that script's
+   path and checksum.
 
-`--all-features` is deliberate: a transitive dependency that only an opt-in
-feature brings in is still in the gate.
+The gate is only as good as the advisory database behind it, so the tool fetches
+it on every run; its own 90-day staleness backstop applies only when fetching is
+disabled. It is verified against **cargo-deny 0.20.2** — the configuration keys
+change between releases, so an unpinned tool makes the gate's answer depend on the
+machine:
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+```
+
+This replaced a hand-written script that cloned the advisory database once and
+never refreshed it, and matched version ranges itself. Both are things the tool
+gets right without being asked.

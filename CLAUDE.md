@@ -33,13 +33,14 @@ indirectly is a dependency of this project whether or not it is named in
 ### The gate
 
 ```sh
-python3 scripts/audit-deps.py
+cargo deny check advisories bans
 ```
 
-It resolves the graph with `cargo metadata --all-features`, compares every
-package against the RustSec advisory database, and exits non-zero if any
-advisory is not covered by a patched release. A change is not finished while
-this exits non-zero.
+[`deny.toml`](deny.toml) resolves the graph with every feature, denies a yanked
+version and an unmaintained or unsound crate anywhere in the graph, and allows a
+build script only for the eight crates listed there. It is verified against
+`cargo-deny` 0.20.2, and the answer depends on the version installed. A change is
+not finished while this exits non-zero.
 
 ### Compile-time execution counts as risk
 

@@ -1,0 +1,24 @@
+[graph]
+# Default features only would leave an opt-in dependency out of the gate.
+all-features = true
+
+[advisories]
+# The tool's defaults are weaker in each of these: a yanked version is a warning,
+# and an unsound crate fails only when it is a direct dependency.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+
+[bans]
+# A build script is a program that runs during `cargo build`. Adding one should
+# be a decision, not a side effect of a version bump.
+build.allow-build-scripts = [
+    "anyhow",
+    "libc",
+    "proc-macro2",
+    "quote",
+    "rustix",
+    "wayland-backend",
+    "wayland-client",
+    "wayland-sys",
+]

@@ -107,7 +107,7 @@ sh scripts/headless-check.sh river
 sh scripts/headless-check.sh niri
 
 sh scripts/capture.sh /tmp/shots            # one PNG per mode, for looking at
-python3 scripts/audit-deps.py               # dependency audit
+cargo deny check advisories bans            # dependency audit
 ```
 
 The end-to-end check boots sway on the headless wlroots backend and drives
@@ -117,7 +117,7 @@ input devices, so its seat advertises no keyboard at all until a
 assert the refusal path.
 
 ```sh
-python3 scripts/audit-deps.py   # dependency audit against the RustSec database
+cargo deny check advisories bans   # RustSec advisories and the build-script allowlist
 ```
 
 ## Configuration
