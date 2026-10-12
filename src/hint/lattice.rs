@@ -43,8 +43,8 @@ mod tests {
 
     #[test]
     fn a_smaller_cell_produces_more_targets() {
-        let mut coarse = Lattice { cell: 200.0 };
-        let mut fine = Lattice { cell: 50.0 };
+        let coarse = Lattice { cell: 200.0 };
+        let fine = Lattice { cell: 50.0 };
         assert!(fine.targets((1280, 720)).len() > coarse.targets((1280, 720)).len());
     }
 
@@ -61,14 +61,14 @@ mod tests {
     #[test]
     fn targets_are_centred_in_their_cells() {
         // Two columns (1280 / 640) and one row (720 / 640 rounds down).
-        let mut lattice = Lattice { cell: 640.0 };
+        let lattice = Lattice { cell: 640.0 };
         let points = lattice.targets((1280, 720));
         assert_eq!(points, vec![(320.0, 360.0), (960.0, 360.0)]);
     }
 
     #[test]
     fn a_square_output_with_a_quarter_cell_gives_a_square_lattice() {
-        let mut lattice = Lattice { cell: 320.0 };
+        let lattice = Lattice { cell: 320.0 };
         let points = lattice.targets((640, 640));
         assert_eq!(points.len(), 4);
         assert_eq!(points[0], (160.0, 160.0));
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn an_absurd_cell_still_yields_one_target() {
-        let mut lattice = Lattice { cell: 100_000.0 };
+        let lattice = Lattice { cell: 100_000.0 };
         assert_eq!(lattice.targets((1280, 720)), vec![(640.0, 360.0)]);
     }
 }

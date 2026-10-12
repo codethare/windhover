@@ -162,7 +162,7 @@ impl Session {
 
     pub fn on_press(&mut self, keysym: Keysym, fast: bool, now: Instant) -> Vec<Effect> {
         if let Some(action) = self.config.bindings.table(self.mode).get(&keysym).copied() {
-            let effects = self.act(action, now, fast, Duration::ZERO);
+            let effects = self.act(action, fast, Duration::ZERO);
             // A press waits out the delay before it repeats; `tick` keeps only
             // the shorter gap from then on.
             self.schedule(action, now, fast, now, REPEAT_DELAY);
@@ -234,7 +234,7 @@ impl Session {
             if let Some(action) = self.config.bindings.normal.get(&keysym).copied() {
                 // The entry is rescheduled only if `act` leaves it alone, and
                 // `pressed_at` keeps the growth counting from the press.
-                effects.extend(self.act(action, now, fast, held));
+                effects.extend(self.act(action, fast, held));
                 self.schedule(action, now, fast, pressed_at, REPEAT_INTERVAL);
             }
         }
@@ -282,7 +282,7 @@ impl Session {
         }
     }
 
-    fn act(&mut self, action: Action, now: Instant, fast: bool, held: Duration) -> Vec<Effect> {
+    fn act(&mut self, action: Action, fast: bool, held: Duration) -> Vec<Effect> {
         if action == Action::Quit {
             self.held.clear();
             return vec![Effect::Exit];
