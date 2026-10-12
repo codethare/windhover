@@ -26,7 +26,7 @@ direct dependency has to be registered here first and pass the check below.
 | `wayland-protocols-wlr` | 0.3.12 | `zwlr_layer_shell_v1`, `zwlr_virtual_pointer_v1` | none |
 | `xkbcommon` | 0.9.0 | key symbol resolution (bindings to the system `libxkbcommon`); `default-features = false` to avoid its `memmap2`-based fd convenience API | none |
 | `tiny-skia` | 0.12.0 | software rasterization: rounded corners, strokes, antialiasing; `default-features = false` to drop the PNG codec we never call | none |
-| `swash` | 0.2.10 | glyph rasterization and font metrics | none |
+| `skrifa` | 0.44.0 | glyph outlines and font metrics. The outlines are filled with `tiny-skia`, so there is no second rasterizer in the tree | none |
 | `rustix` | 1.1.5 | `poll` and `memfd_create` | none |
 | `anyhow` | 1.0.104 | error context | RUSTSEC-2026-0190 (`downcast_mut` unsound), fixed in 1.0.103; this project does not use that method |
 | `libc` | 0.2 | installing the signal handlers that let a session clean up on `SIGTERM` | none |
@@ -47,6 +47,7 @@ reason along with the whole subgraph, so it is back down.
 | `image`, `imageproc` | several advisories, including CVEs; this project synthesizes pixels from scratch and never decodes an arbitrary image |
 | `ttf-parser` (and the wrappers `ab_glyph`, `fontdb`) | RUSTSEC-2026-0192: the author has declared it unmaintained and there is **no** fixed release. A font parser reads a file format, which is exactly the kind of parsing surface worth being careful about |
 | `fontique` | it also removes `ttf-parser`, but pulls in ICU, `memmap2` and `hashbrown` for what is here a single step: family name to file path. The system's own `fc-match` does that, with a probe list as the fallback |
+| `swash` (with `yazi` and `zeno`) | reached `skrifa`/`read-fonts` for parsing, but carried its own scaling, metrics and shaping layer whose upstream is dormant and has open panic reports (`Bitmap::decode`, `GlyphMetrics::advance_width`, and overflow panics in `parse.rs`, `metrics.rs` and `scale/mod.rs`). Since `tiny-skia` was already there to fill a path, drawing the outlines from `skrifa` directly removes three crates and the unmaintained layer without losing anything |
 | `memmap2` | its advisory is fixed as of 0.9.11, but turning off `xkbcommon`'s default features keeps the mmap path out of the tree entirely |
 | `png` | only ever reached through `tiny-skia`'s default feature; nothing here encodes or decodes PNG |
 | `atspi` (with `zbus`, `futures-executor` and 64 more) | 67 crates — more than the rest of the project combined — for one optional capability, element-level hint targets. It was never verified: the test machine has no accessibility bus and no accessible application, so only its fallback path was measurable. It was also the origin of the project's one advisory (`quick-xml`, through `zbus`) and the only part of the tree opening IPC to another process. Hint mode uses the lattice, which was already its default source |

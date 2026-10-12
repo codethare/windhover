@@ -1,15 +1,17 @@
 //! Font loading, text measurement, and drawing.
 //!
-//! `swash` rasterizes; the family name is resolved through the system font
+//! Glyph outlines come from `skrifa` (the Google Fonts `fontations` parser) and
+//! are filled with `tiny-skia`, which is the same rasterizer the rest of the
+//! overlay draws with. The family name is resolved through the system font
 //! database with `fc-match`, falling back to a list of well-known paths when
 //! fontconfig is not installed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::Format;
-use swash::{FontRef, GlyphId};
+use skrifa::outline::OutlinePen;
+use skrifa::prelude::*;
+use tiny_skia::PathBuilder;
 
 use super::canvas::Canvas;
 use super::theme::Rgba;
@@ -28,9 +30,6 @@ const FALLBACK_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ];
 
-/// Resolve a family name to a font file. `fc-match` first, because it knows
-/// about aliases (`sans-serif`) and user-installed fonts; the fixed list is for
-/// systems without fontconfig.
 /// Resolve a family name to a font file and say whether it came from the
 /// fallback list rather than the system's own font database. A generic name
 /// like `sans-serif` resolving to a concrete file is the system answering the
@@ -47,6 +46,8 @@ pub fn find_font(family: &str) -> Option<(PathBuf, bool)> {
 }
 
 fn fc_match(family: &str) -> Option<PathBuf> {
+    // The family is passed as its own argument, never through a shell, so a
+    // configuration value cannot become a command.
     let output = Command::new("fc-match")
         .args(["-f", "%{file}"])
         .arg(family)
@@ -62,10 +63,6 @@ fn fc_match(family: &str) -> Option<PathBuf> {
 
 pub struct Fonts {
     data: Vec<u8>,
-    offset: u32,
-    key: swash::CacheKey,
-    context: ScaleContext,
-    render: Render<'static>,
 }
 
 impl Fonts {
@@ -83,63 +80,54 @@ impl Fonts {
         let Ok(data) = std::fs::read(&path) else {
             return (
                 None,
-                Some(format!("windhover: could not read {}; labels will not be drawn", path.display())),
+                Some(format!(
+                    "windhover: could not read {}; labels will not be drawn",
+                    path.display()
+                )),
             );
         };
-        let Some(font) = FontRef::from_index(&data, 0) else {
+        if FontRef::from_index(&data, 0).is_err() {
             return (
                 None,
                 Some(format!("windhover: {} is not a font file", path.display())),
             );
-        };
-        let offset = font.offset;
-        let key = font.key;
-
+        }
         let warning = substituted.then(|| {
             format!(
                 "windhover: no fontconfig answer for `{family}`; falling back to {}",
                 path.display()
             )
         });
-
-        let fonts = Self {
-            data,
-            offset,
-            key,
-            context: ScaleContext::new(),
-            // Static sources: a colour outline first so emoji and colour fonts
-            // keep their colours, then a plain outline.
-            render: Render::new(&[
-                Source::ColorOutline(0),
-                Source::ColorBitmap(StrikeWith::BestFit),
-                Source::Outline,
-            ]),
-        };
-        (Some(fonts), warning)
+        (Some(Self { data }), warning)
     }
 
-    /// Reusing offset and key keeps swash's caches warm across calls, so the
-    /// reference is rebuilt from the stored fields rather than re-parsed.
-    fn reference(data: &[u8], offset: u32, key: swash::CacheKey) -> FontRef<'_> {
-        FontRef { data, offset, key }
+    /// A parsed view of the loaded file. Cheap: it validates the table
+    /// directory, nothing more.
+    fn font(&self) -> Option<FontRef<'_>> {
+        FontRef::from_index(&self.data, 0).ok()
     }
 
-    /// Distance above and below the baseline. Both come back positive, so
-    /// centring a line on `y` is `y + (ascent - descent) / 2` for the baseline.
+    /// Distance above and below the baseline, both positive, so centring a line
+    /// on `y` is `y + (ascent - descent) / 2` for the baseline.
     pub fn ascent_descent(&self, size: f32) -> (f32, f32) {
-        let font = Self::reference(&self.data, self.offset, self.key);
-        let metrics = font.metrics(&[]);
-        let scale = size / metrics.units_per_em as f32;
-        (metrics.ascent as f32 * scale, metrics.descent as f32 * scale)
+        let Some(metrics) = self.font().map(|font| font.metrics(Size::new(size), LocationRef::default())) else {
+            // A readable default rather than a zero-height badge.
+            return (size * 0.8, size * 0.2);
+        };
+        // skrifa reports the descent as a negative distance from the baseline.
+        (metrics.ascent, -metrics.descent)
     }
 
     /// Width of `text` at `size`, in logical pixels.
     pub fn measure(&self, text: &str, size: f32) -> f32 {
-        let font = Self::reference(&self.data, self.offset, self.key);
-        let metrics = font.glyph_metrics(&[]).scale(size);
+        let Some(font) = self.font() else {
+            return 0.0;
+        };
         let charmap = font.charmap();
+        let metrics = font.glyph_metrics(Size::new(size), LocationRef::default());
         text.chars()
-            .map(|ch| metrics.advance_width(charmap.map(ch)))
+            .map(|ch| glyph_for(&charmap, ch))
+            .filter_map(|glyph| metrics.advance_width(glyph))
             .sum()
     }
 
@@ -166,43 +154,85 @@ impl Fonts {
         size: f32,
         colour: Rgba,
     ) {
-        // Destructured so the font borrows only the font data while the scale
-        // context and the render state are borrowed mutably.
-        let Self {
-            data,
-            offset,
-            key,
-            context,
-            render: render_slot,
-            ..
-        } = self;
-        let font = Self::reference(data, *offset, *key);
+        let Some(font) = self.font() else {
+            return;
+        };
+        let size = Size::new(size);
+        let location = LocationRef::default();
         let charmap = font.charmap();
-        let mut scaler = context.builder(font).size(size).hint(true).build();
-        let mut render = std::mem::replace(render_slot, Render::new(&[Source::Outline]));
-        render.format(Format::Alpha);
+        let metrics = font.glyph_metrics(size, location);
+        let outlines = font.outline_glyphs();
 
-        let mut pen = left;
+        let mut pen_x = left;
         for ch in text.chars() {
-            let glyph: GlyphId = charmap.map(ch);
-            if let Some(image) = render.render(&mut scaler, glyph) {
-                let placement = image.placement;
-                canvas.blit_mask(
-                    pen + placement.left as f32,
-                    baseline - placement.top as f32,
-                    placement.width,
-                    placement.height,
-                    &image.data,
-                    colour,
-                );
+            let glyph = glyph_for(&charmap, ch);
+            if let Some(outline) = outlines.get(glyph) {
+                let mut builder = PathBuilder::new();
+                let mut pen = GlyphPen {
+                    builder: &mut builder,
+                    origin: pen_x,
+                    baseline,
+                };
+                // A glyph whose outline cannot be drawn still advances the pen.
+                if outline.draw(size, &mut pen).is_ok() {
+                    if let Some(path) = builder.finish() {
+                        canvas.fill_path(&path, colour);
+                    }
+                }
             }
-            pen += font
-                .glyph_metrics(&[])
-                .scale(size)
-                .advance_width(glyph);
+            pen_x += metrics.advance_width(glyph).unwrap_or(0.0);
         }
+    }
+}
 
-        *render_slot = render;
+/// A character the font has no mapping for is drawn as `.notdef`, which is what
+/// every other text stack does with it.
+fn glyph_for(charmap: &skrifa::charmap::Charmap<'_>, ch: char) -> GlyphId {
+    charmap.map(ch).unwrap_or(GlyphId::new(0))
+}
+
+/// Forwards a glyph outline into a `tiny-skia` path.
+///
+/// Font outlines are laid out with y increasing upwards from the baseline; the
+/// canvas has y increasing downwards, so every y is mirrored about the baseline.
+struct GlyphPen<'a> {
+    builder: &'a mut PathBuilder,
+    origin: f32,
+    baseline: f32,
+}
+
+impl GlyphPen<'_> {
+    fn point(&self, x: f32, y: f32) -> (f32, f32) {
+        (self.origin + x, self.baseline - y)
+    }
+}
+
+impl OutlinePen for GlyphPen<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let (x, y) = self.point(x, y);
+        self.builder.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let (x, y) = self.point(x, y);
+        self.builder.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        let (cx0, cy0) = self.point(cx0, cy0);
+        let (x, y) = self.point(x, y);
+        self.builder.quad_to(cx0, cy0, x, y);
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let (cx0, cy0) = self.point(cx0, cy0);
+        let (cx1, cy1) = self.point(cx1, cy1);
+        let (x, y) = self.point(x, y);
+        self.builder.cubic_to(cx0, cy0, cx1, cy1, x, y);
+    }
+
+    fn close(&mut self) {
+        self.builder.close();
     }
 }
 
@@ -257,5 +287,17 @@ mod tests {
         };
         // U+10FFFF is unassigned; it must measure like .notdef rather than panic.
         assert!(fonts.measure("\u{10FFFF}", 16.0) > 0.0);
+    }
+
+    #[test]
+    fn the_ascent_and_descent_are_both_positive_distances() {
+        let (Some(fonts), _) = Fonts::load("sans-serif") else {
+            panic!("no font");
+        };
+        let (ascent, descent) = fonts.ascent_descent(20.0);
+        assert!(ascent > 0.0, "ascent = {ascent}");
+        assert!(descent > 0.0, "descent = {descent}");
+        // A line of text is taller than it is wide for a single character.
+        assert!(ascent + descent > fonts.measure("M", 20.0));
     }
 }

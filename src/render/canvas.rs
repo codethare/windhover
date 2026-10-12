@@ -165,59 +165,14 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Composite an 8-bit coverage mask (a rasterized glyph, in practice) in one
-    /// colour. `x`/`y` is the top-left corner of the mask.
-    pub fn blit_mask(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: u32,
-        h: u32,
-        mask: &[u8],
-        colour: Rgba,
-    ) {
-        let origin_x = x.round() as i64;
-        let origin_y = y.round() as i64;
-        let colour_alpha = colour.a as f32 / 255.0;
-        if colour_alpha <= 0.0 {
-            return;
-        }
-        for row in 0..h as i64 {
-            let py = origin_y + row;
-            if py < 0 || py >= self.height as i64 {
-                continue;
-            }
-            for column in 0..w as i64 {
-                let px = origin_x + column;
-                if px < 0 || px >= self.width as i64 {
-                    continue;
-                }
-                let index = (row * w as i64 + column) as usize;
-                let Some(&coverage) = mask.get(index) else {
-                    continue;
-                };
-                let coverage = coverage as f32 / 255.0 * colour_alpha;
-                if coverage <= 0.0 {
-                    continue;
-                }
-                self.blend(px as u32, py as u32, colour, coverage);
-            }
-        }
-    }
-
-    fn blend(&mut self, x: u32, y: u32, colour: Rgba, coverage: f32) {
-        let offset = ((y * self.width + x) * 4) as usize;
-        let Some(pixel) = self.bytes.get_mut(offset..offset + 4) else {
-            return;
-        };
-        let source = [colour.b as f32, colour.g as f32, colour.r as f32];
-        let keep = 1.0 - coverage;
-        for channel in 0..3 {
-            let value = source[channel] * coverage + pixel[channel] as f32 * keep;
-            pixel[channel] = value.round().clamp(0.0, 255.0) as u8;
-        }
-        let alpha = 255.0 * coverage + pixel[3] as f32 * keep;
-        pixel[3] = alpha.round().clamp(0.0, 255.0) as u8;
+    /// Fill an arbitrary path. Glyph outlines arrive this way, already converted
+    /// into canvas coordinates by the text layer.
+    pub fn fill_path(&mut self, path: &Path, colour: Rgba) {
+        let mut paint = Paint::default();
+        paint.set_color(to_canvas(colour));
+        paint.anti_alias = true;
+        self.pixmap()
+            .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
     }
 }
 
@@ -289,12 +244,20 @@ mod tests {
     }
 
     #[test]
-    fn a_blitted_mask_keeps_the_channel_order_too() {
-        let mut bytes = canvas_bytes(2, 2);
-        let mut canvas = Canvas::new(&mut bytes, 2, 2).unwrap();
+    fn filling_a_path_paints_inside_it() {
+        let mut bytes = canvas_bytes(8, 8);
+        let mut canvas = Canvas::new(&mut bytes, 8, 8).unwrap();
         canvas.clear(Rgba::rgba(0, 0, 0, 0));
-        canvas.blit_mask(0.0, 0.0, 2, 2, &[255; 4], Rgba::rgb(0x0A, 0x84, 0xFF));
-        assert_eq!(pixel(&bytes, 2, 0, 0), [0xFF, 0x84, 0x0A, 0xFF]);
+        let mut builder = PathBuilder::new();
+        builder.move_to(2.0, 2.0);
+        builder.line_to(6.0, 2.0);
+        builder.line_to(6.0, 6.0);
+        builder.line_to(2.0, 6.0);
+        builder.close();
+        let path = builder.finish().unwrap();
+        canvas.fill_path(&path, Rgba::rgb(0x0A, 0x84, 0xFF));
+        assert_eq!(pixel(&bytes, 8, 4, 4), [0xFF, 0x84, 0x0A, 0xFF], "channel order swapped");
+        assert_eq!(pixel(&bytes, 8, 0, 0)[3], 0, "painted outside the path");
     }
 
     #[test]
@@ -344,27 +307,6 @@ mod tests {
         canvas.rounded_rect_stroke(1.0, 1.0, 18.0, 18.0, 4.0, 2.0, Rgba::rgb(255, 0, 0));
         assert!(pixel(&bytes, 20, 10, 1)[3] > 0, "top edge missing");
         assert_eq!(pixel(&bytes, 20, 10, 10)[3], 0, "middle should be empty");
-    }
-
-    #[test]
-    fn blitting_a_mask_composites_onto_what_is_there() {
-        let mut bytes = canvas_bytes(4, 4);
-        let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-        canvas.clear(Rgba::rgb(0, 0, 0));
-        canvas.blit_mask(1.0, 1.0, 2, 2, &[255, 0, 0, 255], Rgba::rgb(255, 255, 255));
-        assert_eq!(pixel(&bytes, 4, 1, 1), [255, 255, 255, 255]);
-        assert_eq!(pixel(&bytes, 4, 2, 1), [0, 0, 0, 255]);
-    }
-
-    #[test]
-    fn blitting_outside_the_canvas_is_clipped_not_panicking() {
-        let mut bytes = canvas_bytes(4, 4);
-        let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-        canvas.clear(Rgba::rgb(0, 0, 0));
-        canvas.blit_mask(-2.0, -2.0, 4, 4, &[255; 16], Rgba::rgb(255, 255, 255));
-        canvas.blit_mask(3.0, 3.0, 4, 4, &[255; 16], Rgba::rgb(255, 255, 255));
-        assert_eq!(pixel(&bytes, 4, 0, 0), [255, 255, 255, 255]);
-        assert_eq!(pixel(&bytes, 4, 3, 3), [255, 255, 255, 255]);
     }
 
     #[test]

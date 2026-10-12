@@ -12,7 +12,7 @@ rust-version = "1.85"
 anyhow = "1.0.103"
 libc = "0.2"
 rustix = { version = "1.1", features = ["event", "fs"] }
-swash = "0.2"
+skrifa = "0.44"
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
