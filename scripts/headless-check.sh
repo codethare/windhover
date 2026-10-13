@@ -482,6 +482,34 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: hovering reaches what is under the overlay"
+# An application only sees the pointer move if the overlay does not take pointer
+# events, and hover-dependent UI — a video's controls, a tooltip, a menu — needs
+# exactly that. A session that keeps the pointer to itself makes the cursor a
+# thing that can click but cannot hover.
+session_start --normal
+if session_alive; then
+  "$PROBE" --toplevel --min-lifetime 3000 --settle 900 >"$RUNTIME/hover.out" 2>&1 &
+  HOVER_PID=$!
+  sleep 1.2
+  inject "mods:shift tap:h mods: tap:l tap:l tap:l tap:j tap:j"
+  HOVER_MISSED=""
+  wait "$HOVER_PID" 2>/dev/null || HOVER_MISSED=1
+  HOVER_X=$(head -1 "$RUNTIME/hover.out" | cut -d' ' -f1)
+  if [ -n "$HOVER_MISSED" ]; then
+    fail "the window saw no pointer at all (probe output: $(cat "$RUNTIME/hover.out" | tr '\n' '|'))"
+  elif awk -v x="${HOVER_X:-0}" 'BEGIN { exit !(x > 0) }'; then
+    pass "the window saw the pointer move to x=$HOVER_X"
+  else
+    fail "the window saw the pointer at x=$HOVER_X, where it was not moved"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: a click reaches an ordinary window, not only a layer surface"
 # A real xdg-shell toplevel. Layer surfaces live in the overlay stack, so the
 # check above is not evidence that a click reaches an application window.
@@ -512,8 +540,7 @@ fi
 echo "check: a drag reaches what is under the overlay"
 # `v` holds the left button down while the direction keys drag the pointer, which
 # is how a text selection is made. The press and every motion after it have to
-# reach the window: the overlay takes pointer events for as long as it is up, so
-# a drag that does not get it out of the way selects nothing.
+# reach the window, or the drag selects nothing.
 session_start --normal
 if session_alive; then
   "$PROBE" --toplevel --min-lifetime 3000 --settle 900 >"$RUNTIME/drag.out" 2>&1 &
@@ -523,11 +550,6 @@ if session_alive; then
   inject "tap:v"
   inject "tap:l tap:l tap:l"
   inject "tap:v"
-  # The overlay has to take pointer events back when the drag ends, or a real
-  # mouse would click through it for the rest of the session. This warp goes to
-  # the left edge: a window that sees it reports x at the left of itself, and the
-  # drag above ended several steps to the right of that.
-  inject "mods:shift tap:h mods:"
   wait "$DRAG_PID" 2>/dev/null || true
   # Both are positions inside the window, so their difference is the ground the
   # drag covered, with no assumption about where the compositor put the window.
@@ -535,10 +557,6 @@ if session_alive; then
   DRAG_PRESS_X=$(grep '^click 272 ' "$RUNTIME/drag.out" | head -1 | cut -d' ' -f3)
   if [ -z "$DRAG_PRESS_X" ]; then
     fail "the drag never reached the window (probe output: $(cat "$RUNTIME/drag.out" | tr '\n' '|'))"
-  elif awk -v x="${DRAG_END_X:-0}" 'BEGIN { exit !(x <= 3) }'; then
-    # The drag starts three steps to the right of the left edge, so a position at
-    # the edge is the warp above rather than the drag: the overlay let it through.
-    fail "the window saw the pointer again after the drag ended (x=$DRAG_END_X, at the left edge), so the overlay never took it back"
   elif awk -v end="${DRAG_END_X:-0}" -v press="$DRAG_PRESS_X" 'BEGIN { exit !(end <= press) }'; then
     fail "the press reached the window at x=$DRAG_PRESS_X but the drag moved nothing (ended at x=$DRAG_END_X)"
   else
@@ -551,13 +569,45 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: the pointer stays with the application after a drag"
+# The drag used to take the pointer back when it ended, which is what made a
+# window see nothing move unless a click was in flight. It stays with the
+# application now, so a move after a drag is seen like any other motion.
+session_start --normal
+if session_alive; then
+  "$PROBE" --toplevel --min-lifetime 2500 --settle 900 >"$RUNTIME/after-drag.out" 2>&1 &
+  AFTER_DRAG_PID=$!
+  sleep 1.2
+  inject "mods:shift tap:h mods: tap:l tap:l tap:l tap:j tap:j"
+  inject "tap:v tap:v"
+  # A relative move, not a jump to an edge: on a compositor that tiles the window
+  # into a column, an edge of the output is an edge of nothing.
+  inject "tap:l tap:l"
+  wait "$AFTER_DRAG_PID" 2>/dev/null || true
+  AFTER_X=$(head -1 "$RUNTIME/after-drag.out" | cut -d' ' -f1)
+  AFTER_PRESS_X=$(grep '^click 272 ' "$RUNTIME/after-drag.out" | head -1 | cut -d' ' -f3)
+  if [ -z "$AFTER_PRESS_X" ]; then
+    fail "the window saw no press at all (probe output: $(cat "$RUNTIME/after-drag.out" | tr '\n' '|'))"
+  elif awk -v end="${AFTER_X:-0}" -v press="$AFTER_PRESS_X" 'BEGIN { exit !(end > press) }'; then
+    pass "the window saw the pointer move after the drag (from $AFTER_PRESS_X to $AFTER_X)"
+  else
+    fail "the window did not see the pointer move after a drag (press at $AFTER_PRESS_X, ended at $AFTER_X)"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: scrolling reaches what is under the overlay"
-# Same probe on the bottom layer: a wheel event can only reach it if the session
-# both sent one and got its overlay out of the way.
+# The probe on the bottom layer takes the wheel like any other window: the
+# overlay does not take pointer events. It has to be moved onto before it can
+# report anything, so the pointer is moved first.
 session_start --normal
 if session_alive; then
   probe_start "--layer bottom"
-  inject "tap:d"
+  inject "tap:l tap:d"
   probe_wait
   AXIS=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f2)
   VALUE=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f3)

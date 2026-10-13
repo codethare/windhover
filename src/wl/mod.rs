@@ -51,10 +51,10 @@ pub struct State {
     pub ring: Option<BufferRing>,
     pub output_index: Option<usize>,
     pub keys: Keyboard,
-    /// Where the compositor last reported the pointer, and where it was last
-    /// asked to put it. The two differ until the compositor answers.
+    /// Where the compositor last reported the pointer. Only filled during the
+    /// handshake at startup: the overlay stops taking pointer events once the
+    /// starting position is known, so the session tracks its own moves from there.
     pub pointer_pos: Option<(f64, f64)>,
-    pub sent_pos: Option<(f64, f64)>,
     pub closed: bool,
     pub keyboard_ready: bool,
     pub pointer_ready: bool,
@@ -225,7 +225,6 @@ impl Wayland {
             output_index: None,
             keys: Keyboard::default(),
             pointer_pos: None,
-            sent_pos: None,
             closed: false,
             keyboard_ready: false,
             pointer_ready: false,
@@ -316,6 +315,9 @@ impl Wayland {
             self.create_overlay(candidate)?;
             self.establish_virtual_pointer()?;
             if self.state.pointer_pos.is_some() {
+                // The pointer position is known, which is the last thing the
+                // overlay was needed for. From here the applications have it.
+                self.hand_over_pointer()?;
                 return Ok(());
             }
         }
@@ -325,7 +327,16 @@ impl Wayland {
         self.state.pointer_pos = None;
         self.create_overlay(None)?;
         self.establish_virtual_pointer()?;
+        self.hand_over_pointer()?;
         Ok(())
+    }
+
+    /// Let applications see the pointer, for the rest of the session.
+    fn hand_over_pointer(&mut self) -> Result<()> {
+        if let Some(overlay) = self.state.overlay.as_ref() {
+            overlay.hand_over_pointer();
+        }
+        self.roundtrip()
     }
 
     fn create_overlay(&mut self, output_index: Option<usize>) -> Result<()> {
@@ -458,7 +469,6 @@ impl Wayland {
     }
 
     pub fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
-        self.state.sent_pos = Some((x, y));
         let (w, h) = self.state.logical_size();
         if let Some(pointer) = &self.state.vp {
             pointer.move_absolute(x, y, w.max(1), h.max(1));
@@ -492,66 +502,6 @@ impl Wayland {
     /// a drag reaches the window underneath. The surface is left mapped:
     /// destroying it would drop the keyboard grab with it, and the point of the
     /// overlay staying up is that the session keeps receiving keys.
-    pub fn release_pointer(&mut self) -> Result<()> {
-        // The position the compositor was last asked for, not the one it last
-        // reported: a warp in the same batch has not been answered yet.
-        let (x, y) = match self.state.sent_pos {
-            Some(sent) => sent,
-            None => self.state.cursor(),
-        };
-        let overlay = self
-            .state
-            .overlay
-            .as_ref()
-            .ok_or_else(|| anyhow!("no overlay to suspend"))?;
-        overlay.capture_pointer(false);
-        // A compositor re-runs its pointer hit test on motion, not on an input
-        // region change, so the position is sent again now that the overlay has
-        // stopped taking events. Without it the event lands on us.
-        self.move_pointer(x, y)?;
-        self.roundtrip()
-    }
-
-    /// Hold or release the left button as a drag. The overlay lets the pointer
-    /// through for as long as the drag lasts, because the button is held across
-    /// the turns that follow and every one of those motions has to reach the
-    /// window the selection is being made in.
-    pub fn set_drag(&mut self, pressed: bool) -> Result<()> {
-        if pressed {
-            self.release_pointer()?;
-            self.button(crate::wl::pointer::BTN_LEFT, true)
-        } else {
-            self.button(crate::wl::pointer::BTN_LEFT, false)?;
-            self.capture_pointer()
-        }
-    }
-
-    /// Let the overlay take pointer events again.
-    pub fn capture_pointer(&mut self) -> Result<()> {
-        if let Some(overlay) = self.state.overlay.as_ref() {
-            overlay.capture_pointer(true);
-        }
-        self.roundtrip()
-    }
-
-    /// Release the pointer for the duration of one action. A drag is not an
-    /// action of this shape: it holds the button down while the pointer is moved
-    /// over several turns, so it releases and captures the pointer itself.
-    pub fn without_overlay<T>(&mut self, action: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.release_pointer()?;
-
-        let result = action(self);
-        // Let the compositor act on the click or scroll while the overlay is
-        // still out of the way. Restoring the input region in the same batch
-        // leaves whether the event was delivered to chance.
-        let acknowledged = self.roundtrip();
-
-        self.capture_pointer()?;
-
-        acknowledged?;
-        result
-    }
-
     pub fn finish(mut self) {
         if let Some(overlay) = self.state.overlay.take() {
             overlay.destroy();

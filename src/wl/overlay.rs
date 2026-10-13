@@ -223,15 +223,16 @@ impl Overlay {
         }
     }
 
-    /// Whether the overlay takes pointer events, which decide where a click or a
-    /// scroll lands. The surface stays mapped either way, so the keyboard grab
-    /// and the drawn frame survive: giving both up is what a rebuild would cost.
-    pub fn capture_pointer(&self, capture: bool) {
-        match capture {
-            // `None` is the whole surface, which is also the default.
-            true => self.surface.set_input_region(None),
-            false => self.surface.set_input_region(Some(&self.empty_region)),
-        }
+    /// Give the pointer to whatever is under the overlay, for good.
+    ///
+    /// A layer surface that takes pointer events hides every motion from the
+    /// application below it, and hover-dependent UI — a video's controls, a menu,
+    /// a tooltip — only reacts to motion it can see: without this the cursor can
+    /// click things but never hover them. The overlay stays mapped and painted
+    /// either way; what it contributes is the ring and the labels, not the input,
+    /// and a click reaches the window underneath because nothing takes it first.
+    pub fn hand_over_pointer(&self) {
+        self.surface.set_input_region(Some(&self.empty_region));
         self.surface.commit();
     }
 

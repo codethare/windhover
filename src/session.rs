@@ -20,6 +20,7 @@ use crate::mode::Effect;
 pub use crate::mode::Mode;
 use crate::render::{self, Canvas, Fonts, Frame, GridFrame, HintFrame};
 use crate::trace;
+use crate::wl::pointer::BTN_LEFT;
 use crate::wl::Wayland;
 
 /// How long a movement key has to be held before it starts repeating, and the
@@ -606,7 +607,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         if let Some(focused) = wl.state.keys.take_focus_change() {
             for effect in session.note_keyboard(focused, now) {
                 if let Effect::Drag(pressed) = effect {
-                    wl.set_drag(pressed)?;
+                    wl.button(BTN_LEFT, pressed)?;
                 }
             }
         }
@@ -633,13 +634,12 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         for effect in &effects {
             match *effect {
                 Effect::Move { .. } | Effect::Warp { .. } => {}
-                Effect::Click { button } => {
-                    // The overlay has to be out of the way for the click to
-                    // reach the window underneath.
-                    wl.without_overlay(|wl| wl.click(button))?;
-                }
-                Effect::Scroll { steps } => wl.without_overlay(|wl| wl.scroll(steps))?,
-                Effect::Drag(pressed) => wl.set_drag(pressed)?,
+                // Nothing has to be done to let these through: the overlay gave
+                // the pointer to the application at startup, so a click, a wheel
+                // event or a held button lands where the pointer is.
+                Effect::Click { button } => wl.click(button)?,
+                Effect::Scroll { steps } => wl.scroll(steps)?,
+                Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
                 Effect::Switch(_) => {}
                 Effect::Exit => exit = true,
             }
