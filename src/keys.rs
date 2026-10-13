@@ -131,8 +131,9 @@ fn table(entries: &[(&str, Action)]) -> HashMap<Keysym, Action> {
 }
 
 impl Default for Bindings {
-    /// The defaults follow warpd's normal-mode keys. `r` and `e` scroll, which
-    /// warpd binds the same way.
+    /// The defaults follow warpd's normal-mode keys, except the scroll keys:
+    /// warpd binds `r` and `e`, and these are `u` and `d`, the pair `less` and
+    /// `vi` use for up and down.
     fn default() -> Self {
         Self {
             normal: table(&[
@@ -143,8 +144,8 @@ impl Default for Bindings {
                 ("H", Action::EdgeLeft),
                 ("M", Action::EdgeMiddle),
                 ("L", Action::EdgeRight),
-                ("r", Action::ScrollUp),
-                ("e", Action::ScrollDown),
+                ("u", Action::ScrollUp),
+                ("d", Action::ScrollDown),
                 ("m", Action::ClickLeft),
                 ("comma", Action::ClickMiddle),
                 ("period", Action::ClickRight),

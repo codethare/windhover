@@ -515,7 +515,7 @@ echo "check: scrolling reaches what is under the overlay"
 session_start --normal
 if session_alive; then
   probe_start "--layer bottom"
-  inject "tap:e"
+  inject "tap:d"
   probe_wait
   AXIS=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f2)
   VALUE=$(grep '^axis ' "$RUNTIME/probe.out" | cut -d' ' -f3)

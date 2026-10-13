@@ -56,8 +56,8 @@ edge_middle: M
 edge_right: L
 
 # Wheel
-scroll_up: r
-scroll_down: e
+scroll_up: u
+scroll_down: d
 
 # Buttons and dragging
 button_left: m
@@ -109,7 +109,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `quit` | `Escape` | End the session (bound in every mode) |
 | `normal_left` `normal_right` `normal_up` `normal_down` | `h` `l` `k` `j` | Move one step |
 | `edge_left` `edge_middle` `edge_right` | `H` `M` `L` | Jump to the left edge, the middle, the right edge |
-| `scroll_up` `scroll_down` | `r` `e` | Wheel |
+| `scroll_up` `scroll_down` | `u` `d` | Wheel |
 | `button_left` `button_middle` `button_right` | `m` `,` `.` | Click |
 | `drag` | `v` | Hold the left button, or release it |
 | `grid_mode` `hint_mode` | `g` `x` | Enter grid or hint mode |
