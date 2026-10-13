@@ -534,7 +534,20 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                     wl.without_overlay(|wl| wl.click(button))?;
                 }
                 Effect::Scroll { steps } => wl.without_overlay(|wl| wl.scroll(steps))?,
-                Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
+                Effect::Drag(pressed) => {
+                    // A drag is not one action: the button is held while the
+                    // pointer is moved over the turns that follow, and every one
+                    // of those motions has to reach the window the selection is
+                    // being made in. So the overlay lets the pointer through for
+                    // as long as the drag lasts, not for one event.
+                    if pressed {
+                        wl.release_pointer()?;
+                        wl.button(BTN_LEFT, true)?;
+                    } else {
+                        wl.button(BTN_LEFT, false)?;
+                        wl.capture_pointer()?;
+                    }
+                }
                 Effect::Switch(_) => {}
                 Effect::Exit => exit = true,
             }

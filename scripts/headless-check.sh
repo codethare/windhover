@@ -509,6 +509,48 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: a drag reaches what is under the overlay"
+# `v` holds the left button down while the direction keys drag the pointer, which
+# is how a text selection is made. The press and every motion after it have to
+# reach the window: the overlay takes pointer events for as long as it is up, so
+# a drag that does not get it out of the way selects nothing.
+session_start --normal
+if session_alive; then
+  "$PROBE" --toplevel --min-lifetime 3000 --settle 900 >"$RUNTIME/drag.out" 2>&1 &
+  DRAG_PID=$!
+  sleep 1.2
+  inject "mods:shift tap:h mods: tap:l tap:l tap:l tap:j tap:j"
+  inject "tap:v"
+  inject "tap:l tap:l tap:l"
+  inject "tap:v"
+  # The overlay has to take pointer events back when the drag ends, or a real
+  # mouse would click through it for the rest of the session. This warp goes to
+  # the left edge: a window that sees it reports x at the left of itself, and the
+  # drag above ended several steps to the right of that.
+  inject "mods:shift tap:h mods:"
+  wait "$DRAG_PID" 2>/dev/null || true
+  # Both are positions inside the window, so their difference is the ground the
+  # drag covered, with no assumption about where the compositor put the window.
+  DRAG_END_X=$(head -1 "$RUNTIME/drag.out" | cut -d' ' -f1)
+  DRAG_PRESS_X=$(grep '^click 272 ' "$RUNTIME/drag.out" | head -1 | cut -d' ' -f3)
+  if [ -z "$DRAG_PRESS_X" ]; then
+    fail "the drag never reached the window (probe output: $(cat "$RUNTIME/drag.out" | tr '\n' '|'))"
+  elif awk -v x="${DRAG_END_X:-0}" 'BEGIN { exit !(x <= 3) }'; then
+    # The drag starts three steps to the right of the left edge, so a position at
+    # the edge is the warp above rather than the drag: the overlay let it through.
+    fail "the window saw the pointer again after the drag ended (x=$DRAG_END_X, at the left edge), so the overlay never took it back"
+  elif awk -v end="${DRAG_END_X:-0}" -v press="$DRAG_PRESS_X" 'BEGIN { exit !(end <= press) }'; then
+    fail "the press reached the window at x=$DRAG_PRESS_X but the drag moved nothing (ended at x=$DRAG_END_X)"
+  else
+    pass "the drag pressed at $DRAG_PRESS_X and dragged the pointer to $DRAG_END_X in the window"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: scrolling reaches what is under the overlay"
 # Same probe on the bottom layer: a wheel event can only reach it if the session
 # both sent one and got its overlay out of the way.

@@ -488,11 +488,11 @@ impl Wayland {
         self.button(button, false)
     }
 
-    /// Stop the overlay taking pointer events for the duration of an action, so
-    /// a click or a scroll reaches the window underneath. The surface is left
-    /// mapped: destroying it would drop the keyboard grab with it, and the
-    /// point of the overlay staying up is that the session keeps receiving keys.
-    pub fn without_overlay<T>(&mut self, action: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+    /// Stop the overlay taking pointer events, so that a click, a wheel event or
+    /// a drag reaches the window underneath. The surface is left mapped:
+    /// destroying it would drop the keyboard grab with it, and the point of the
+    /// overlay staying up is that the session keeps receiving keys.
+    pub fn release_pointer(&mut self) -> Result<()> {
         // The position the compositor was last asked for, not the one it last
         // reported: a warp in the same batch has not been answered yet.
         let (x, y) = match self.state.sent_pos {
@@ -507,9 +507,24 @@ impl Wayland {
         overlay.capture_pointer(false);
         // A compositor re-runs its pointer hit test on motion, not on an input
         // region change, so the position is sent again now that the overlay has
-        // stopped taking events. Without it the click or scroll lands on us.
+        // stopped taking events. Without it the event lands on us.
         self.move_pointer(x, y)?;
-        self.roundtrip()?;
+        self.roundtrip()
+    }
+
+    /// Let the overlay take pointer events again.
+    pub fn capture_pointer(&mut self) -> Result<()> {
+        if let Some(overlay) = self.state.overlay.as_ref() {
+            overlay.capture_pointer(true);
+        }
+        self.roundtrip()
+    }
+
+    /// Release the pointer for the duration of one action. A drag is not an
+    /// action of this shape: it holds the button down while the pointer is moved
+    /// over several turns, so it releases and captures the pointer itself.
+    pub fn without_overlay<T>(&mut self, action: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.release_pointer()?;
 
         let result = action(self);
         // Let the compositor act on the click or scroll while the overlay is
@@ -517,10 +532,7 @@ impl Wayland {
         // leaves whether the event was delivered to chance.
         let acknowledged = self.roundtrip();
 
-        if let Some(overlay) = self.state.overlay.as_ref() {
-            overlay.capture_pointer(true);
-        }
-        self.roundtrip()?;
+        self.capture_pointer()?;
 
         acknowledged?;
         result
