@@ -390,6 +390,13 @@ cursor_check "grid: warp and click through" --grid "tap:w tap:space" "W*3/4" "H/
 # first cell.
 cursor_check "hint: the first label" --hint "tap:a tap:a" \
   "(W/(int(W/110)>0?int(W/110):1))*0.5" "(H/(int(H/110)>0?int(H/110):1))*0.5"
+# `H` is bound in normal mode only, so the cursor landing on the left edge is
+# what proves the selection handed over to normal mode instead of staying in the
+# mode it was made in. The same key proves it for a grid warp.
+cursor_check "hint: a selected label lands in normal mode" --hint \
+  "tap:a tap:a mods:shift tap:h mods:" 0 -
+cursor_check "grid: a warp lands in normal mode" --grid \
+  "tap:w tap:Return mods:shift tap:h mods:" 0 -
 
 echo "check: a click reaches what is under the overlay"
 # The probe is put on the *bottom* layer, so it sits below the overlay: the
