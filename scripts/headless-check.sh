@@ -615,6 +615,29 @@ else
   fail "the refusal does not name the option: $(cat "$RUNTIME/oneshot-bad.out")"
 fi
 
+echo "check: a release that never arrives does not repeat forever"
+# A compositor can swallow a key's release without saying anything — river does
+# when a drag turns into a drag-and-drop — and then the repeat would travel
+# forever with the button still down and no key able to stop it. Nothing tells
+# that apart from a user really holding the key, so the hold is bounded.
+session_start --normal
+if session_alive; then
+  inject "mods:shift tap:h mods:"
+  inject "down:l"
+  sleep 7
+  if session_alive; then
+    fail "the session kept repeating a key whose release never arrived"
+    kill "$SESSION_PID" 2>/dev/null || true
+  elif grep -q "release never arrived" "$RUNTIME/session.out"; then
+    pass "the session ended itself — $(head -1 "$RUNTIME/session.out")"
+  else
+    fail "the session ended without saying why: $(cat "$RUNTIME/session.out")"
+  fi
+  # The key is still down as far as the compositor is concerned, and a session
+  # started later would seed it from `Enter` and then ignore that key.
+  inject "up:l"
+fi
+
 echo "check: a session that loses the keyboard ends itself"
 # The seat can take the keyboard away from a session: another layer surface
 # asking for it exclusively is enough. No key reaches the session from then on,

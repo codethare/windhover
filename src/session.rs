@@ -36,6 +36,17 @@ const GROWTH_INTERVAL: Duration = Duration::from_millis(200);
 const GROWTH_LIMIT: f64 = 4.0;
 /// Movement with the fast modifier covers this many steps in one press.
 const FAST_STEP: f64 = 2.0;
+/// How long a repeat may run before its key's release is taken to have been
+/// lost. A repeat is stopped by the release, so a compositor that swallows one —
+/// river does when a drag turns into a drag-and-drop — leaves the pointer
+/// travelling forever: it pins at the edge, the button stays down so the window
+/// keeps dragging, and no key reaches the session to stop any of it, because the
+/// compositor stopped delivering keys without saying so. Nothing tells that
+/// apart from a user genuinely holding a key down, so the damage is bounded
+/// instead: the pointer crosses any output in well under a second at the
+/// accelerated rate, and five seconds of wheel steps is far more than one press
+/// is for.
+const MAX_HOLD: Duration = Duration::from_secs(5);
 /// How long the seat may hold the keyboard away from a session before the
 /// session gives up. Nothing the user presses can reach it in the meantime, so
 /// it cannot be ended by hand: it would sit there with its overlay up holding a
@@ -247,6 +258,24 @@ impl Session {
 
     /// Effects that have come due since the last turn: held movement keys.
     pub fn tick(&mut self, now: Instant) -> Vec<Effect> {
+        if self
+            .held
+            .iter()
+            .any(|entry| now.saturating_duration_since(entry.pressed_at) >= MAX_HOLD)
+        {
+            eprintln!(
+                "windhover: a key held this long means its release never arrived; \
+                 ending the session"
+            );
+            self.held.clear();
+            let mut effects = self.normal.release_drag();
+            // Ending is the only way out from here: the compositor that lost the
+            // release may also have stopped delivering the key that would quit.
+            effects.push(Effect::Exit);
+            self.apply(&effects);
+            return effects;
+        }
+
         let mut due = Vec::new();
         for entry in &mut self.held {
             if entry.next <= now {
@@ -903,6 +932,34 @@ mod tests {
         let effects = press(&mut session, "Return");
         assert!(effects.contains(&Effect::Switch(Mode::Normal)));
         assert!(!effects.contains(&Effect::Exit));
+    }
+
+    #[test]
+    fn a_hold_that_outlasts_its_release_ends_the_session() {
+        let mut session = session();
+        let start = Instant::now();
+        press_with(&mut session, "v", false, start);
+        press_with(&mut session, "l", false, start);
+
+        // Still a hold before the limit, so the repeat carries on.
+        let before = session.tick(start + MAX_HOLD - Duration::from_millis(1));
+        assert!(!before.contains(&Effect::Exit), "{before:?}");
+        assert!(before.iter().any(|e| matches!(e, Effect::Move { .. })), "{before:?}");
+
+        let effects = session.tick(start + MAX_HOLD);
+        assert_eq!(effects, vec![Effect::Drag(false), Effect::Exit]);
+        assert_eq!(session.time_to_next_repeat(start + MAX_HOLD), None);
+        assert!(!session.frame(1.0).dragging);
+    }
+
+    #[test]
+    fn a_hold_within_the_limit_still_repeats() {
+        let mut session = session();
+        let start = Instant::now();
+        press_with(&mut session, "l", false, start);
+        let effects = session.tick(start + REPEAT_DELAY + Duration::from_millis(1));
+        assert!(!effects.contains(&Effect::Exit), "{effects:?}");
+        assert!(session.time_to_next_repeat(start) .is_some());
     }
 
     #[test]
