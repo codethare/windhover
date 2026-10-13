@@ -615,6 +615,34 @@ else
   fail "the refusal does not name the option: $(cat "$RUNTIME/oneshot-bad.out")"
 fi
 
+echo "check: a session that loses the keyboard ends itself"
+# The seat can take the keyboard away from a session: another layer surface
+# asking for it exclusively is enough. No key reaches the session from then on,
+# so a held key would keep moving the pointer forever, a drag would keep a window
+# dragging, and there would be no Escape to leave by: only a signal would end it.
+if [ "$COMPOSITOR" = "niri" ]; then
+  echo "  skip  niri keeps the keyboard with the session that holds it"
+else
+  session_start --normal
+  if session_alive; then
+    "$WINDHOVER" --normal >"$RUNTIME/usurper.out" 2>&1 &
+    USURPER_PID=$!
+    PIDS="$PIDS $USURPER_PID"
+    sleep 2
+    if session_alive; then
+      fail "the session kept going after the keyboard was taken away"
+      kill "$SESSION_PID" 2>/dev/null || true
+    elif grep -q "took the keyboard away" "$RUNTIME/session.out"; then
+      pass "the session ended itself — $(head -1 "$RUNTIME/session.out")"
+    else
+      fail "the session ended without saying why: $(cat "$RUNTIME/session.out")"
+    fi
+    kill "$USURPER_PID" 2>/dev/null || true
+  else
+    fail "session did not start: $(cat "$RUNTIME/session.out")"
+  fi
+fi
+
 echo "check: configuration"
 # session_start_config <config path> <mode flag>
 session_start_config() {

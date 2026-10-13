@@ -40,12 +40,24 @@ pub struct Keyboard {
     /// the modifiers the user is still holding from the hotkey become visible
     /// without being mistaken for input.
     down: HashSet<u32>,
+    /// Whether the seat has given this session the keyboard. A button press on a
+    /// window is enough to take it away, and without it no key can reach this
+    /// session: not the release of a held key, not the one that ends a drag, and
+    /// not the one that quits.
+    focused: bool,
+    /// Set when that changes, and consumed by the session.
+    focus_change: Option<bool>,
     events: Vec<KeyEvent>,
 }
 
 impl Keyboard {
     pub fn drain(&mut self) -> Vec<KeyEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Whether the session has the keyboard, reported once per change.
+    pub fn take_focus_change(&mut self) -> Option<bool> {
+        self.focus_change.take()
     }
 
     fn load_keymap(
@@ -97,10 +109,20 @@ impl Keyboard {
                 self.load_keymap(format, fd, size)
             }
             wl_keyboard::Event::Enter { keys, .. } => {
+                if !self.focused {
+                    self.focused = true;
+                    self.focus_change = Some(true);
+                }
                 self.down.clear();
                 self.down.extend(keys.iter().map(|key| u32::from(*key)));
             }
-            wl_keyboard::Event::Leave { .. } => self.down.clear(),
+            wl_keyboard::Event::Leave { .. } => {
+                if self.focused {
+                    self.focused = false;
+                    self.focus_change = Some(false);
+                }
+                self.down.clear();
+            }
             wl_keyboard::Event::Key { key, state, .. } => {
                 let key = u32::from(key);
                 let pressed = match state {

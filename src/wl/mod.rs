@@ -512,6 +512,20 @@ impl Wayland {
         self.roundtrip()
     }
 
+    /// Hold or release the left button as a drag. The overlay lets the pointer
+    /// through for as long as the drag lasts, because the button is held across
+    /// the turns that follow and every one of those motions has to reach the
+    /// window the selection is being made in.
+    pub fn set_drag(&mut self, pressed: bool) -> Result<()> {
+        if pressed {
+            self.release_pointer()?;
+            self.button(crate::wl::pointer::BTN_LEFT, true)
+        } else {
+            self.button(crate::wl::pointer::BTN_LEFT, false)?;
+            self.capture_pointer()
+        }
+    }
+
     /// Let the overlay take pointer events again.
     pub fn capture_pointer(&mut self) -> Result<()> {
         if let Some(overlay) = self.state.overlay.as_ref() {

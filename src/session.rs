@@ -19,7 +19,6 @@ use crate::mode::normal::{Context, Normal};
 use crate::mode::Effect;
 pub use crate::mode::Mode;
 use crate::render::{self, Canvas, Fonts, Frame, GridFrame, HintFrame};
-use crate::wl::pointer::BTN_LEFT;
 use crate::wl::Wayland;
 
 /// How long a movement key has to be held before it starts repeating, and the
@@ -37,6 +36,12 @@ const GROWTH_INTERVAL: Duration = Duration::from_millis(200);
 const GROWTH_LIMIT: f64 = 4.0;
 /// Movement with the fast modifier covers this many steps in one press.
 const FAST_STEP: f64 = 2.0;
+/// How long the seat may hold the keyboard away from a session before the
+/// session gives up. Nothing the user presses can reach it in the meantime, so
+/// it cannot be ended by hand: it would sit there with its overlay up holding a
+/// button down, and the only way out would be a signal. The startup handshake
+/// flaps the focus for a few milliseconds, which this is far above.
+const KEYBOARD_GRACE: Duration = Duration::from_millis(500);
 
 /// Set from a signal handler, acted on by the session loop. Doing the teardown
 /// in the loop rather than in the handler keeps the handler async-signal-safe
@@ -93,6 +98,8 @@ pub struct Session {
     /// With `--oneshot`, the hand-over that ends grid or hint mode ends the
     /// session instead of returning to normal mode.
     oneshot: bool,
+    /// When the seat took the keyboard away, if it has not given it back.
+    keyboard_lost_at: Option<Instant>,
     /// Whether anything the overlay draws has changed. Not every input produces
     /// an effect — typing a digit or a hint label character changes what is on
     /// screen and nothing else — so the driver cannot infer this from effects.
@@ -112,6 +119,7 @@ impl Session {
             cell_labels: Vec::new(),
             held: Vec::new(),
             oneshot,
+            keyboard_lost_at: None,
             redraw: true,
         };
         session.reset_grid();
@@ -145,6 +153,28 @@ impl Session {
             self.cursor = position;
             self.redraw = true;
         }
+    }
+
+    /// The seat gained or lost the keyboard. Losing it means no key can end what
+    /// is in progress, so everything a held key was doing stops here, and a drag
+    /// is released rather than left holding a button on a window.
+    pub fn note_keyboard(&mut self, focused: bool, now: Instant) -> Vec<Effect> {
+        self.keyboard_lost_at = if focused { None } else { Some(now) };
+        if focused {
+            return Vec::new();
+        }
+        self.held.clear();
+        let effects = self.normal.release_drag();
+        self.apply(&effects);
+        effects
+    }
+
+    /// Whether the keyboard has been gone long enough that the session should
+    /// end, which is what keeps a session nobody can type into from having to be
+    /// killed from another terminal.
+    pub fn keyboard_gone(&self, now: Instant) -> bool {
+        self.keyboard_lost_at
+            .is_some_and(|lost| now.saturating_duration_since(lost) >= KEYBOARD_GRACE)
     }
 
     /// Whether the overlay needs repainting, clearing the flag.
@@ -496,6 +526,13 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
     let mut exit = false;
     while !exit && !wl.state.closed && !interrupted() {
         let now = Instant::now();
+        if session.keyboard_gone(now) {
+            eprintln!(
+                "windhover: the compositor took the keyboard away, so nothing can be pressed; \
+                 ending the session"
+            );
+            break;
+        }
         let timeout = session
             .time_to_next_repeat(now)
             .unwrap_or(Duration::from_millis(200))
@@ -504,6 +541,18 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
 
         if let Some(position) = wl.state.take_pointer_pos() {
             session.observe_cursor(position);
+        }
+
+        // The seat can take the keyboard away mid-session: a button press on a
+        // window is enough. Nothing pressed reaches us from then on, so a held
+        // key stops moving the pointer and a drag releases its button instead of
+        // leaving a window dragging forever.
+        if let Some(focused) = wl.state.keys.take_focus_change() {
+            for effect in session.note_keyboard(focused, now) {
+                if let Effect::Drag(pressed) = effect {
+                    wl.set_drag(pressed)?;
+                }
+            }
         }
 
         let mut effects = Vec::new();
@@ -534,20 +583,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                     wl.without_overlay(|wl| wl.click(button))?;
                 }
                 Effect::Scroll { steps } => wl.without_overlay(|wl| wl.scroll(steps))?,
-                Effect::Drag(pressed) => {
-                    // A drag is not one action: the button is held while the
-                    // pointer is moved over the turns that follow, and every one
-                    // of those motions has to reach the window the selection is
-                    // being made in. So the overlay lets the pointer through for
-                    // as long as the drag lasts, not for one event.
-                    if pressed {
-                        wl.release_pointer()?;
-                        wl.button(BTN_LEFT, true)?;
-                    } else {
-                        wl.button(BTN_LEFT, false)?;
-                        wl.capture_pointer()?;
-                    }
-                }
+                Effect::Drag(pressed) => wl.set_drag(pressed)?,
                 Effect::Switch(_) => {}
                 Effect::Exit => exit = true,
             }
@@ -867,6 +903,35 @@ mod tests {
         let effects = press(&mut session, "Return");
         assert!(effects.contains(&Effect::Switch(Mode::Normal)));
         assert!(!effects.contains(&Effect::Exit));
+    }
+
+    #[test]
+    fn losing_the_keyboard_stops_a_held_key_and_releases_a_drag() {
+        let mut session = session();
+        let start = Instant::now();
+        press_with(&mut session, "v", false, start);
+        assert!(session.frame(1.0).dragging);
+        press_with(&mut session, "l", false, start);
+        assert!(session.time_to_next_repeat(start).is_some());
+
+        // No key can reach the session from here, so nothing would ever release
+        // the key or end the drag: they have to end themselves.
+        let effects = session.note_keyboard(false, start);
+        assert_eq!(effects, vec![Effect::Drag(false)]);
+        assert_eq!(session.time_to_next_repeat(start), None, "the pointer kept moving");
+        assert!(!session.frame(1.0).dragging);
+    }
+
+    #[test]
+    fn the_keyboard_coming_back_clears_the_deadline() {
+        let mut session = session();
+        let start = Instant::now();
+        session.note_keyboard(false, start);
+        assert!(!session.keyboard_gone(start + KEYBOARD_GRACE - Duration::from_millis(1)));
+        assert!(session.keyboard_gone(start + KEYBOARD_GRACE));
+
+        session.note_keyboard(true, start + KEYBOARD_GRACE);
+        assert!(!session.keyboard_gone(start + KEYBOARD_GRACE * 10));
     }
 
     #[test]
