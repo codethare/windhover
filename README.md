@@ -136,6 +136,29 @@ assert the refusal path.
 cargo deny check advisories bans   # RustSec advisories and the build-script allowlist
 ```
 
+## Diagnostics
+
+A session is a client of a compositor nobody here runs, and the failures that
+matter are the ones it never sees: a key the layout cannot produce, a key release
+that never arrives, a keyboard taken away without a `leave`. Two things help.
+
+`--trace` prints what the session observed — the keyboard focus, every key with
+the keysym it resolved to, every keymap it installs, mode changes, and one line
+per turn of its event loop that did something. Include it, redirected to a file,
+in a report:
+
+```sh
+windhover --hint --trace 2>/tmp/windhover.log
+```
+
+And when the layout a session is given has no key for one of its bindings, it
+says so instead of leaving that binding quietly dead:
+
+```
+windhover: this keyboard layout cannot produce these bindings, so they will do
+nothing: quit (Escape)
+```
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/windhover/config`, falling back to

@@ -577,6 +577,49 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: a binding the layout cannot produce is reported"
+# `eacute` is a real keysym, so the configuration accepts it, but a layout
+# without a key for it can never produce it. The binding that ends the session is
+# the one that matters here: without a word about it, a session nothing can leave
+# looks like a working one.
+printf 'scroll_up: eacute\nquit: F13\n' >"$RUNTIME/dead-keys"
+"$WINDHOVER" --config "$RUNTIME/dead-keys" --normal >"$RUNTIME/session.out" 2>&1 &
+SESSION_PID=$!
+sleep 1
+if session_alive; then
+  if grep -q "cannot produce" "$RUNTIME/session.out"; then
+    pass "the session names the bindings that cannot be pressed — $(head -1 "$RUNTIME/session.out")"
+  else
+    fail "the session said nothing about the bindings: $(cat "$RUNTIME/session.out")"
+  fi
+  kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
+echo "check: --trace prints what the session saw"
+# The failures that matter are the ones the client never sees, so a report of one
+# has to come with the session's own account of it.
+session_start --normal --trace
+if session_alive; then
+  inject "tap:l"
+  sleep 0.4
+  inject "tap:Escape"
+  sleep 0.6
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+  if ! grep -q "^TRACE key XK_l down" "$RUNTIME/session.out"; then
+    fail "the trace does not show the key: $(cat "$RUNTIME/session.out")"
+  elif ! grep -q "^TRACE focus enter" "$RUNTIME/session.out"; then
+    fail "the trace does not show the keyboard focus: $(cat "$RUNTIME/session.out")"
+  elif ! grep -q "^TRACE turn " "$RUNTIME/session.out"; then
+    fail "the trace does not show the event loop: $(cat "$RUNTIME/session.out")"
+  else
+    pass "the trace shows the focus, the keys and the loop"
+  fi
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: a one-shot session ends itself"
 # The workflow the README documents is one session per hotkey press. Without
 # --oneshot every one of them stays alive in normal mode after the label is

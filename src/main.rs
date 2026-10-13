@@ -6,6 +6,7 @@ mod keys;
 mod mode;
 mod render;
 mod session;
+mod trace;
 mod wl;
 
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ OPTIONS:
     -x, --hint          start in hint mode
     -o, --oneshot       exit when the mode hands over, instead of dropping into
                         normal mode (grid and hint only)
+    -t, --trace         print what the session sees, for a bug report
     -c, --config PATH   read this configuration file instead of the default
     -h, --help          print this help and exit
     -V, --version       print the version and exit
@@ -58,7 +60,13 @@ fn run() -> anyhow::Result<()> {
             mode,
             config,
             oneshot,
-        } => session::run(mode, config.as_deref(), oneshot),
+            trace,
+        } => {
+            if trace {
+                crate::trace::enable();
+            }
+            session::run(mode, config.as_deref(), oneshot)
+        }
     }
 }
 
@@ -70,6 +78,7 @@ enum Command {
         mode: Mode,
         config: Option<PathBuf>,
         oneshot: bool,
+        trace: bool,
     },
 }
 
@@ -78,6 +87,7 @@ impl Command {
         let mut start = None;
         let mut config = None;
         let mut oneshot = false;
+        let mut trace = false;
         let mut args = args.peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -87,6 +97,7 @@ impl Command {
                 "-g" | "--grid" => start = Some(Mode::Grid),
                 "-x" | "--hint" => start = Some(Mode::Hint),
                 "-o" | "--oneshot" => oneshot = true,
+                "-t" | "--trace" => trace = true,
                 "-c" | "--config" => {
                     let path = args
                         .next()
@@ -107,6 +118,7 @@ impl Command {
             mode,
             config,
             oneshot,
+            trace,
         })
     }
 }
@@ -124,6 +136,7 @@ mod tests {
             mode,
             config: None,
             oneshot: false,
+            trace: false,
         }
     }
 
@@ -158,6 +171,7 @@ mod tests {
                 mode: Mode::Normal,
                 config: Some(PathBuf::from("/dev/null")),
                 oneshot: false,
+                trace: false,
             }
         );
     }
@@ -170,6 +184,7 @@ mod tests {
                 mode: Mode::Normal,
                 config: Some(PathBuf::from("/tmp/x")),
                 oneshot: false,
+                trace: false,
             }
         );
         assert_eq!(
@@ -178,6 +193,7 @@ mod tests {
                 mode: Mode::Hint,
                 config: Some(PathBuf::from("/tmp/x")),
                 oneshot: false,
+                trace: false,
             }
         );
     }
@@ -201,8 +217,24 @@ mod tests {
                 mode: Mode::Hint,
                 config: None,
                 oneshot: true,
+                trace: false,
             }
         );
+    }
+
+    #[test]
+    fn trace_is_read_and_kept_with_the_mode() {
+        assert_eq!(
+            parse(&["--trace"]).unwrap(),
+            Command::Start {
+                mode: Mode::Normal,
+                config: None,
+                oneshot: false,
+                trace: true,
+            }
+        );
+        // It is a diagnostic, not a mode: it combines with anything.
+        assert!(parse(&["-t", "--hint", "--oneshot"]).is_ok());
     }
 
     #[test]

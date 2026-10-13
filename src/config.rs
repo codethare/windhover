@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::keys::{modes_for, parse_key, Action, Bindings, Keysym};
+use crate::keys::{key_name, modes_for, parse_key, Action, Bindings, Keysym};
 use crate::render::theme::Rgba;
 use crate::render::Theme;
 
@@ -78,6 +78,36 @@ impl Config {
     pub fn grid_cells(&self) -> Option<&[Keysym]> {
         let needed = (self.grid_columns.max(1) * self.grid_rows.max(1)) as usize;
         (self.bindings.grid_cells.len() >= needed).then(|| &self.bindings.grid_cells[..needed])
+    }
+
+    /// The configured bindings this keyboard layout cannot produce, named as the
+    /// options they were set by. A key the layout has no symbol for is a binding
+    /// that silently does nothing, and one of them is the key that ends the
+    /// session — with it gone, nothing the user presses can leave.
+    pub fn unreachable_bindings(&self, reachable: &HashSet<Keysym>) -> Vec<String> {
+        let mut missing: Vec<String> = Vec::new();
+        for table in [
+            &self.bindings.normal,
+            &self.bindings.grid,
+            &self.bindings.hint,
+        ] {
+            for (keysym, action) in table {
+                if reachable.contains(keysym) {
+                    continue;
+                }
+                let entry = format!("{} ({})", action_option(*action), key_name(*keysym));
+                if !missing.contains(&entry) {
+                    missing.push(entry);
+                }
+            }
+        }
+        for keysym in &self.bindings.grid_cells {
+            if !reachable.contains(keysym) {
+                missing.push(format!("grid_cells ({})", key_name(*keysym)));
+            }
+        }
+        missing.sort();
+        missing
     }
 
     /// Read the configuration, returning it alongside the warnings to print.
@@ -432,6 +462,37 @@ mod tests {
         assert!(!warns("accent: blue\n").is_empty());
         assert!(!warns("accent: 12345\n").is_empty());
         assert!(!warns("accent: zzzzzz\n").is_empty());
+    }
+
+    #[test]
+    fn a_layout_that_cannot_produce_a_binding_is_reported() {
+        let (config, _) = parse("");
+        // Everything the defaults are bound to, as a layout that produces it all.
+        let mut reachable: HashSet<Keysym> = config
+            .bindings
+            .normal
+            .keys()
+            .chain(config.bindings.grid.keys())
+            .chain(config.bindings.hint.keys())
+            .chain(config.bindings.grid_cells.iter())
+            .copied()
+            .collect();
+        assert_eq!(config.unreachable_bindings(&reachable), Vec::<String>::new());
+
+        // Take the key that leaves the session away from the layout: nothing the
+        // user presses can end it, and that has to be said out loud.
+        reachable.remove(&parse_key("Escape").unwrap());
+        assert_eq!(
+            config.unreachable_bindings(&reachable),
+            vec!["quit (Escape)".to_string()]
+        );
+
+        // A cell key has no action of its own, so it is named as the option.
+        let (bound, _) = parse("grid_cells: F12 grave\n");
+        let empty: HashSet<Keysym> = HashSet::new();
+        let reported = bound.unreachable_bindings(&empty);
+        assert!(reported.contains(&"grid_cells (F12)".to_string()), "{reported:?}");
+        assert!(reported.contains(&"grid_cells (grave)".to_string()), "{reported:?}");
     }
 
     #[test]

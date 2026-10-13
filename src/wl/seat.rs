@@ -11,6 +11,7 @@ use wayland_client::{
 use xkbcommon::xkb;
 
 use super::State;
+use crate::trace;
 
 /// Wayland reports the raw evdev code, and xkbcommon indexes keys by the XKB
 /// code, which sits eight above it. Resolving an evdev code directly reads the
@@ -47,6 +48,9 @@ pub struct Keyboard {
     focused: bool,
     /// Set when that changes, and consumed by the session.
     focus_change: Option<bool>,
+    /// Set when a keymap is installed, and consumed by the session: that is the
+    /// point at which the configured bindings can be checked against the layout.
+    keymap_loaded: bool,
     events: Vec<KeyEvent>,
 }
 
@@ -58,6 +62,36 @@ impl Keyboard {
     /// Whether the session has the keyboard, reported once per change.
     pub fn take_focus_change(&mut self) -> Option<bool> {
         self.focus_change.take()
+    }
+
+    /// Whether a keymap has been installed since this was last asked.
+    pub fn take_keymap_loaded(&mut self) -> bool {
+        std::mem::take(&mut self.keymap_loaded)
+    }
+
+    /// Every keysym this keymap can produce, over all of its layouts and levels.
+    /// A binding that is not in here cannot be pressed whatever the user does,
+    /// which is worth saying out loud: one of the bindings is the one that ends
+    /// the session.
+    pub fn reachable_keysyms(&self) -> Vec<xkb::Keysym> {
+        let Some(keymap) = &self.keymap else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut reachable = Vec::new();
+        for raw in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
+            let key = xkb::Keycode::new(raw);
+            for layout in 0..keymap.num_layouts_for_key(key) {
+                for level in 0..keymap.num_levels_for_key(key, layout) {
+                    for sym in keymap.key_get_syms_by_level(key, layout, level) {
+                        if *sym != xkb::Keysym::NoSymbol && seen.insert(*sym) {
+                            reachable.push(*sym);
+                        }
+                    }
+                }
+            }
+        }
+        reachable
     }
 
     fn load_keymap(
@@ -99,8 +133,14 @@ impl Keyboard {
             eprintln!("windhover: compositor sent an xkb keymap that could not be parsed");
             return;
         };
+        trace::log(format_args!(
+            "keymap loaded, keycodes {}..={}",
+            keymap.min_keycode().raw(),
+            keymap.max_keycode().raw()
+        ));
         self.state = Some(xkb::State::new(&keymap));
         self.keymap = Some(keymap);
+        self.keymap_loaded = true;
     }
 
     fn handle(&mut self, event: wl_keyboard::Event) {
@@ -109,6 +149,7 @@ impl Keyboard {
                 self.load_keymap(format, fd, size)
             }
             wl_keyboard::Event::Enter { keys, .. } => {
+                trace::log(format_args!("focus enter, {} keys already down", keys.len()));
                 if !self.focused {
                     self.focused = true;
                     self.focus_change = Some(true);
@@ -117,6 +158,7 @@ impl Keyboard {
                 self.down.extend(keys.iter().map(|key| u32::from(*key)));
             }
             wl_keyboard::Event::Leave { .. } => {
+                trace::log(format_args!("focus leave"));
                 if self.focused {
                     self.focused = false;
                     self.focus_change = Some(false);
@@ -142,6 +184,11 @@ impl Keyboard {
                         xkb_state.key_get_one_sym(xkb::Keycode::new(key + XKB_KEYCODE_OFFSET));
                     let fast =
                         xkb_state.mod_name_is_active(FAST_MODIFIER, xkb::STATE_MODS_EFFECTIVE);
+                    trace::log(format_args!(
+                        "key {:?} {} fast={fast}",
+                        keysym,
+                        if pressed { "down" } else { "up" }
+                    ));
                     self.events.push(KeyEvent {
                         keysym,
                         pressed,
@@ -272,6 +319,26 @@ mod tests {
             state: WEnum::Value(wl_keyboard::KeyState::Pressed),
         });
         keyboard.drain()
+    }
+
+    #[test]
+    fn the_reachable_keysyms_are_the_ones_the_keymap_defines() {
+        let keyboard = keyboard();
+        let reachable = keyboard.reachable_keysyms();
+        assert!(reachable.contains(&parse_key("Escape").unwrap()), "{reachable:?}");
+        assert!(reachable.contains(&parse_key("h").unwrap()), "{reachable:?}");
+        // Defined as a keycode, but this keymap gives it no symbol.
+        assert!(
+            !reachable.contains(&parse_key("j").unwrap()),
+            "a key the keymap has no symbol for was reported as reachable"
+        );
+    }
+
+    #[test]
+    fn a_keymap_is_reported_once_when_it_arrives() {
+        let mut keyboard = keyboard();
+        assert!(keyboard.take_keymap_loaded());
+        assert!(!keyboard.take_keymap_loaded());
     }
 
     #[test]

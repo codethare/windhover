@@ -19,6 +19,7 @@ use crate::mode::normal::{Context, Normal};
 use crate::mode::Effect;
 pub use crate::mode::Mode;
 use crate::render::{self, Canvas, Fonts, Frame, GridFrame, HintFrame};
+use crate::trace;
 use crate::wl::Wayland;
 
 /// How long a movement key has to be held before it starts repeating, and the
@@ -431,6 +432,7 @@ impl Session {
             effects = self.normal.release_drag();
         }
         self.apply(&effects);
+        trace::log(format_args!("mode {:?} -> {mode:?}", self.mode));
         self.held.clear();
         self.redraw = true;
         self.mode = mode;
@@ -572,6 +574,31 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
             session.observe_cursor(position);
         }
 
+        // A binding the layout cannot produce is a key that will never work,
+        // and one of the bindings ends the session: a layout that cannot produce
+        // it is a session nothing can leave. Checked when the keymap arrives,
+        // which is also when a layout switch replaces it.
+        if wl.state.keys.take_keymap_loaded() {
+            let reachable: std::collections::HashSet<Keysym> =
+                wl.state.keys.reachable_keysyms().into_iter().collect();
+            let missing = session.config.unreachable_bindings(&reachable);
+            if !missing.is_empty() {
+                eprintln!(
+                    "windhover: this keyboard layout cannot produce these bindings, \
+                     so they will do nothing: {}",
+                    missing.join(", ")
+                );
+            }
+            trace::log(format_args!(
+                "layout can produce {} keysyms of the {} bound",
+                reachable.len(),
+                session.config.bindings.normal.len()
+                    + session.config.bindings.grid.len()
+                    + session.config.bindings.hint.len()
+                    + session.config.bindings.grid_cells.len()
+            ));
+        }
+
         // The seat can take the keyboard away mid-session: a button press on a
         // window is enough. Nothing pressed reaches us from then on, so a held
         // key stops moving the pointer and a drag releases its button instead of
@@ -616,6 +643,15 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                 Effect::Switch(_) => {}
                 Effect::Exit => exit = true,
             }
+        }
+
+        if trace::enabled() && (!effects.is_empty() || timeout.is_zero()) {
+            trace::log(format_args!(
+                "turn timeout={:?} cursor=({:.0},{:.0}) effects={effects:?}",
+                timeout,
+                session.cursor().0,
+                session.cursor().1
+            ));
         }
 
         if session.take_redraw() {
