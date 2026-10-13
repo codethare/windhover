@@ -398,6 +398,36 @@ cursor_check "hint: a selected label lands in normal mode" --hint \
 cursor_check "grid: a warp lands in normal mode" --grid \
   "tap:w tap:Return mods:shift tap:h mods:" 0 -
 
+echo "check: one session carries several mode round trips"
+# The workflow the README documents: a single session, with `x` and `g` entering
+# the other modes from inside it. What this checks is that the session survives
+# the hand-overs, because a session left alive per activation was what put a
+# cursor ring at every place the user had been.
+session_start --normal
+if session_alive; then
+  probe_start "--min-lifetime 3000 --settle 600"
+  inject "tap:x tap:a tap:a"        # hint, first label
+  inject "tap:x tap:a tap:s"        # hint again, same session
+  inject "tap:g tap:w tap:Return"   # grid warp, same session
+  # `H` is bound in normal mode alone, so landing on the left edge proves the
+  # session came back to normal mode and is still taking keys.
+  inject "mods:shift tap:h mods:"
+  probe_wait
+  X=$(head -1 "$RUNTIME/probe.out" | cut -d' ' -f1)
+  if ! session_alive; then
+    fail "the session did not survive the mode round trips"
+  elif close_enough "${X:-999}" 0; then
+    pass "one session took hint, hint again and grid, and still answers in normal mode"
+  else
+    fail "normal mode after three hand-overs moved to x=$X, wanted 0 (probe: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
+  fi
+  inject "tap:Escape"
+  sleep 0.4
+  session_alive && kill "$SESSION_PID" 2>/dev/null || true
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
+fi
+
 echo "check: a click reaches what is under the overlay"
 # The probe is put on the *bottom* layer, so it sits below the overlay: the
 # click can only reach it if the session really did take its overlay down first.

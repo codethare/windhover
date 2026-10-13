@@ -60,49 +60,57 @@ rules and the audit command.
 
 ## Compositor setup
 
+One binding is enough. It starts a session, and `g` and `x` enter grid and hint
+mode from inside it — so one session serves as many jumps as you want, and each
+selection or warp drops straight back into normal mode with `h` `j` `k` `l` still
+under your fingers. `Escape` ends the session.
+
 ### sway
 
 ```
-bindsym Mod4+Mod1+x exec windhover --hint --oneshot
-bindsym Mod4+Mod1+c exec windhover --normal
-bindsym Mod4+Mod1+g exec windhover --grid --oneshot
+bindsym Mod4+Mod1+c exec windhover
 ```
-
-`--oneshot` ends the session when the mode it started in hands over: the label
-or the warp happens, and then the process exits instead of dropping into normal
-mode. A hotkey gives you one action per press, so leaving a session alive for
-each press would stack them — each holding the keyboard and painting its own
-cursor ring, and each needing its own Escape. Drop the flag when you want one
-long-lived session instead: `windhover --normal` bound to a hotkey, `x` to enter
-hint mode again for the next jump, one Escape to leave.
 
 ### niri
 
 ```kdl
 binds {
-    Mod+Alt+X { spawn "windhover" "--hint"; }
-    Mod+Alt+C { spawn "windhover" "--normal"; }
-    Mod+Alt+G { spawn "windhover" "--grid"; }
+    Mod+Alt+C { spawn "windhover"; }
 }
 ```
 
 ### river
 
 ```sh
-riverctl map normal Super+Alt X spawn windhover --hint
-riverctl map normal Super+Alt C spawn windhover --normal
-riverctl map normal Super+Alt G spawn windhover --grid
+riverctl map normal Super+Alt C spawn windhover
 ```
 
-The three bindings above are the same ones warpd documents
-(`Mod4+Mod1+x` / `c` / `g` → `--hint` / `--normal` / `--grid`).
+`Mod4+Mod1+c` is the binding warpd documents for normal mode. A session holds the
+keyboard exclusively, so a second press of that hotkey cannot reach the
+compositor while one is running — `Escape` is what gives the keyboard back.
+
+### One key per press instead
+
+`--oneshot` ends the session when the mode it started in hands over, for a
+binding you press per jump rather than a session you stay in:
+
+```
+bindsym Mod4+Mod1+x exec windhover --hint --oneshot
+bindsym Mod4+Mod1+g exec windhover --grid --oneshot
+```
+
+The window closes as soon as the pointer lands, so this cannot show you where it
+landed, and a binding like this is not meant to sit next to the session above:
+`--hint --oneshot` pressed while a session is still running stacks a second one,
+which holds the keyboard and paints its own cursor ring.
 
 ## Usage
 
 ```sh
-windhover --normal   # default when no mode flag is given
+windhover            # normal mode, which is the default
 windhover --grid
 windhover --hint
+windhover --hint --oneshot   # one jump, then exit
 ```
 
 ## Testing
