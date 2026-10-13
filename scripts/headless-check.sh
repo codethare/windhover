@@ -498,6 +498,44 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: a one-shot session ends itself"
+# The workflow the README documents is one session per hotkey press. Without
+# --oneshot every one of them stays alive in normal mode after the label is
+# activated, so the screen collects their overlays: one cursor ring each, and one
+# Escape per leftover session. Twice in a row is what a hotkey does.
+oneshot_check() {
+  NAME=$1
+  KEYS=$2
+  "$WINDHOVER" --hint --oneshot >"$RUNTIME/oneshot.out" 2>&1 &
+  ONESHOT_PID=$!
+  sleep 1.2
+  inject "$KEYS"
+  sleep 1
+  if kill -0 "$ONESHOT_PID" 2>/dev/null; then
+    kill "$ONESHOT_PID" 2>/dev/null || true
+    fail "$NAME: still running after the label was activated"
+    return
+  fi
+  STATUS=0
+  wait "$ONESHOT_PID" 2>/dev/null || STATUS=$?
+  if [ "$STATUS" = "0" ]; then
+    pass "$NAME"
+  else
+    fail "$NAME: exit status $STATUS"
+  fi
+}
+oneshot_check "a one-shot hint session ends itself" "tap:a tap:a"
+oneshot_check "and the next one leaves nothing behind" "tap:a tap:s"
+
+echo "check: a mode that never hands over is refused"
+if "$WINDHOVER" --normal --oneshot >"$RUNTIME/oneshot-bad.out" 2>&1; then
+  fail "\`--normal --oneshot\` started a session"
+elif grep -q -- "--oneshot" "$RUNTIME/oneshot-bad.out"; then
+  pass "one-shot with normal mode is refused — $(head -1 "$RUNTIME/oneshot-bad.out")"
+else
+  fail "the refusal does not name the option: $(cat "$RUNTIME/oneshot-bad.out")"
+fi
+
 echo "check: configuration"
 # session_start_config <config path> <mode flag>
 session_start_config() {

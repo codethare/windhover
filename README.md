@@ -63,10 +63,18 @@ rules and the audit command.
 ### sway
 
 ```
-bindsym Mod4+Mod1+x exec windhover --hint
+bindsym Mod4+Mod1+x exec windhover --hint --oneshot
 bindsym Mod4+Mod1+c exec windhover --normal
-bindsym Mod4+Mod1+g exec windhover --grid
+bindsym Mod4+Mod1+g exec windhover --grid --oneshot
 ```
+
+`--oneshot` ends the session when the mode it started in hands over: the label
+or the warp happens, and then the process exits instead of dropping into normal
+mode. A hotkey gives you one action per press, so leaving a session alive for
+each press would stack them — each holding the keyboard and painting its own
+cursor ring, and each needing its own Escape. Drop the flag when you want one
+long-lived session instead: `windhover --normal` bound to a hotkey, `x` to enter
+hint mode again for the next jump, one Escape to leave.
 
 ### niri
 

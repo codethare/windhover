@@ -90,6 +90,9 @@ pub struct Session {
     cell_labels: Vec<String>,
     /// Keys held down that repeat, with the time their next repeat is due.
     held: Vec<Held>,
+    /// With `--oneshot`, the hand-over that ends grid or hint mode ends the
+    /// session instead of returning to normal mode.
+    oneshot: bool,
     /// Whether anything the overlay draws has changed. Not every input produces
     /// an effect — typing a digit or a hint label character changes what is on
     /// screen and nothing else — so the driver cannot infer this from effects.
@@ -97,7 +100,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(screen: (u32, u32), config: Config) -> Self {
+    pub fn new(screen: (u32, u32), config: Config, oneshot: bool) -> Self {
         let mut session = Self {
             mode: Mode::Normal,
             cursor: (screen.0 as f64 / 2.0, screen.1 as f64 / 2.0),
@@ -108,6 +111,7 @@ impl Session {
             hint: Hint::default(),
             cell_labels: Vec::new(),
             held: Vec::new(),
+            oneshot,
             redraw: true,
         };
         session.reset_grid();
@@ -204,8 +208,7 @@ impl Session {
                 None => Vec::new(),
             },
         };
-        self.apply(&effects);
-        effects
+        self.finish(effects)
     }
 
     pub fn on_release(&mut self, keysym: Keysym) {
@@ -303,8 +306,32 @@ impl Session {
             Mode::Hint => self.hint.on_action(action),
         };
 
+        self.finish(effects)
+    }
+
+    /// Fold the session's own effects in and hand back what the driver has to
+    /// do. Every effect the session produces passes through here, so a one-shot
+    /// session ends wherever its mode hands over.
+    fn finish(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
+        let effects = self.end_at_handover(effects);
         self.apply(&effects);
         effects
+    }
+
+    /// With `--oneshot`, the hand-over that would return to normal mode is the
+    /// end of the session. Grid and hint both hand over through the same
+    /// effect, and normal mode never emits it.
+    fn end_at_handover(&self, effects: Vec<Effect>) -> Vec<Effect> {
+        if !self.oneshot {
+            return effects;
+        }
+        effects
+            .into_iter()
+            .map(|effect| match effect {
+                Effect::Switch(Mode::Normal) => Effect::Exit,
+                other => other,
+            })
+            .collect()
     }
 
     /// Effects the session owns are folded in here; the driver handles the
@@ -429,7 +456,7 @@ fn printable(keysym: Keysym) -> Option<char> {
     }
 }
 
-pub fn run(start: Mode, config_path: Option<&std::path::Path>) -> Result<()> {
+pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) -> Result<()> {
     // Read the configuration before connecting: a bad `--config` path should
     // fail immediately rather than after the overlay has taken the keyboard.
     let (config, warnings) = Config::load(config_path)?;
@@ -452,7 +479,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>) -> Result<()> {
         );
     }
 
-    let mut session = Session::new(screen, config);
+    let mut session = Session::new(screen, config, oneshot);
     session.observe_cursor(wl.state.cursor());
     if start != Mode::Normal {
         // The mode flags hand the session over to the requested mode without
@@ -540,7 +567,11 @@ mod tests {
     use crate::keys::parse_key;
 
     fn session() -> Session {
-        Session::new((1280, 720), Config::default())
+        Session::new((1280, 720), Config::default(), false)
+    }
+
+    fn one_shot_session() -> Session {
+        Session::new((1280, 720), Config::default(), true)
     }
 
     fn press(session: &mut Session, name: &str) -> Vec<Effect> {
@@ -766,6 +797,63 @@ mod tests {
         assert_eq!(session.cursor(), (10.0, 20.0));
         press(&mut session, "l");
         assert_eq!(session.cursor(), (30.0, 20.0));
+    }
+
+    #[test]
+    fn a_one_shot_session_ends_when_hint_mode_hands_over() {
+        let mut session = one_shot_session();
+        session.switch_to(Mode::Hint);
+        let label: Vec<char> = {
+            let visible = session.hint().visible();
+            visible[0].0.label.chars().collect()
+        };
+        for (index, ch) in label.iter().enumerate() {
+            let effects = press(&mut session, &ch.to_string());
+            if index + 1 == label.len() {
+                assert!(
+                    effects.contains(&Effect::Exit),
+                    "the hand-over did not end the session: {effects:?}"
+                );
+                assert!(
+                    !effects.contains(&Effect::Switch(Mode::Normal)),
+                    "a one-shot session still switched to normal mode"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_shot_session_still_warps_before_it_ends() {
+        let mut session = one_shot_session();
+        session.switch_to(Mode::Hint);
+        let (x, y, label) = {
+            let visible = session.hint().visible();
+            (visible[0].0.x, visible[0].0.y, visible[0].0.label.clone())
+        };
+        for (index, ch) in label.chars().enumerate() {
+            let effects = press(&mut session, &ch.to_string());
+            if index + 1 == label.chars().count() {
+                assert!(effects.contains(&Effect::Warp { x, y }), "{effects:?}");
+                assert_eq!(effects.last(), Some(&Effect::Exit));
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_shot_session_ends_when_grid_hands_over() {
+        let mut session = one_shot_session();
+        session.switch_to(Mode::Grid);
+        let effects = press(&mut session, "Return");
+        assert!(effects.contains(&Effect::Exit), "{effects:?}");
+    }
+
+    #[test]
+    fn a_plain_session_still_returns_to_normal_mode() {
+        let mut session = session();
+        session.switch_to(Mode::Grid);
+        let effects = press(&mut session, "Return");
+        assert!(effects.contains(&Effect::Switch(Mode::Normal)));
+        assert!(!effects.contains(&Effect::Exit));
     }
 
     #[test]
