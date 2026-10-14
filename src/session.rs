@@ -45,9 +45,9 @@ const FAST_STEP: f64 = 2.0;
 /// keeps dragging, and no key reaches the session to stop any of it, because the
 /// compositor stopped delivering keys without saying so. Nothing tells that
 /// apart from a user genuinely holding a key down, so the damage is bounded
-/// instead: the pointer crosses any output in well under a second at the
-/// accelerated rate, and five seconds of wheel steps is far more than one press
-/// is for.
+/// instead: the step grows to four times while a key is down, so five seconds of
+/// holding covers far more ground than one press is for, and far more wheel steps
+/// than one press is for too.
 const MAX_HOLD: Duration = Duration::from_secs(5);
 /// How long the seat may hold the keyboard away from a session before the
 /// session gives up. Nothing the user presses can reach it in the meantime, so

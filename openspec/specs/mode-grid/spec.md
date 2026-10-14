@@ -54,7 +54,8 @@ is smaller than the minimum size.
 #### Scenario: Reaching the minimum size
 
 - **WHEN** the active region is narrower or shorter than the minimum size
-  threshold (twice the normal-mode step by default)
+  threshold (40 logical pixels by default, configurable, and independent of the
+  movement step)
 - **THEN** grid mode switches to normal mode automatically, leaving the pointer
   where it is for the user to adjust
 
