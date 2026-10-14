@@ -88,7 +88,7 @@ option's existing bindings.
 The configuration SHALL cover at least the following options, with the value in
 parentheses as the default: the quit key (`Escape`), the four normal-mode
 direction keys (`h` `j` `k` `l`), the normal-mode step (derived from the output
-size, about 20 logical pixels), the three edge-jump keys (`H` `M` `L`), the three
+size, about 10 logical pixels), the three edge-jump keys (`H` `M` `L`), the three
 mouse-button keys (`m` `,` `.`), the drag toggle (`v`), the keys that enter grid
 and hint mode (`g` `x`), the grid partition (`2x2`), the grid cell key table, the
 grid minimum size, the grid undo key (`BackSpace`), the grid warp key (`Return`),

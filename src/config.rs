@@ -69,7 +69,7 @@ impl Config {
     /// The step actually used on this output.
     pub fn step_for(&self, screen: (u32, u32)) -> f64 {
         self.step
-            .unwrap_or_else(|| (screen.1 as f64 / 36.0).max(8.0))
+            .unwrap_or_else(|| (screen.1 as f64 / 72.0).max(4.0))
     }
 
     /// The grid cell keys, in row-major order, for a given partition. Returns

@@ -309,7 +309,7 @@ close_enough() {
 want() {
   # `-` means "do not care about this axis".
   [ "$3" = "-" ] && return 0
-  awk -v W="$1" -v H="$2" "BEGIN { s = H / 36; if (s < 8) s = 8; print ($3) }"
+  awk -v W="$1" -v H="$2" "BEGIN { s = H / 72; if (s < 4) s = 4; print ($3) }"
 }
 
 # cursor_check <name> <mode flag> <keys> <x expression|-> <y expression|->

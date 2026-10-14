@@ -709,9 +709,9 @@ mod tests {
     fn a_move_updates_the_cursor_by_one_step() {
         let mut session = session();
         press(&mut session, "l");
-        assert_eq!(session.cursor(), (660.0, 360.0));
+        assert_eq!(session.cursor(), (650.0, 360.0));
         press(&mut session, "k");
-        assert_eq!(session.cursor(), (660.0, 340.0));
+        assert_eq!(session.cursor(), (650.0, 350.0));
     }
 
     #[test]
@@ -754,10 +754,10 @@ mod tests {
         press(&mut session, "0");
         assert_eq!(session.frame(1.0).multiplier, Some(10));
         press(&mut session, "l");
-        assert_eq!(session.cursor(), (840.0, 360.0));
+        assert_eq!(session.cursor(), (740.0, 360.0));
         assert_eq!(session.frame(1.0).multiplier, None);
         press(&mut session, "l");
-        assert_eq!(session.cursor(), (860.0, 360.0));
+        assert_eq!(session.cursor(), (750.0, 360.0));
     }
 
     #[test]
@@ -831,16 +831,16 @@ mod tests {
         let start = Instant::now();
         let keysym = parse_key("l").unwrap();
         session.on_press(keysym, false, start);
-        assert_eq!(session.cursor(), (660.0, 360.0));
+        assert_eq!(session.cursor(), (650.0, 360.0));
 
         assert!(session.tick(start).is_empty(), "repeated before the delay");
         let later = start + REPEAT_DELAY + Duration::from_millis(1);
         // Held for 300 ms, so the step has grown by one factor already.
         assert_eq!(
             session.tick(later),
-            vec![Effect::Move { dx: 40.0, dy: 0.0 }]
+            vec![Effect::Move { dx: 20.0, dy: 0.0 }]
         );
-        assert_eq!(session.cursor(), (700.0, 360.0));
+        assert_eq!(session.cursor(), (670.0, 360.0));
 
         session.on_release(keysym);
         assert!(
@@ -910,7 +910,7 @@ mod tests {
         session.observe_cursor((10.0, 20.0));
         assert_eq!(session.cursor(), (10.0, 20.0));
         press(&mut session, "l");
-        assert_eq!(session.cursor(), (30.0, 20.0));
+        assert_eq!(session.cursor(), (20.0, 20.0));
     }
 
     #[test]
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn the_growth_stops_at_its_limit() {
         let steps = held_steps(false, 60);
-        let ceiling = 20.0 * GROWTH_LIMIT;
+        let ceiling = 10.0 * GROWTH_LIMIT;
         assert_eq!(*steps.last().unwrap(), ceiling, "{steps:?}");
         assert!(steps.iter().all(|step| *step <= ceiling), "{steps:?}");
     }
@@ -1077,7 +1077,7 @@ mod tests {
     fn the_fast_modifier_doubles_the_step() {
         let mut session = session();
         press_with(&mut session, "l", true, Instant::now());
-        assert_eq!(session.cursor(), (680.0, 360.0));
+        assert_eq!(session.cursor(), (660.0, 360.0));
     }
 
     #[test]
@@ -1101,6 +1101,6 @@ mod tests {
 
         let before = session.cursor().0;
         press_with(&mut session, "l", false, Instant::now());
-        assert_eq!(session.cursor().0 - before, 20.0);
+        assert_eq!(session.cursor().0 - before, 10.0);
     }
 }
