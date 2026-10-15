@@ -406,8 +406,8 @@ echo "check: one session carries several mode round trips"
 session_start --normal
 if session_alive; then
   probe_start "--min-lifetime 3000 --settle 600"
-  inject "tap:x tap:a tap:a"        # hint, first label
-  inject "tap:x tap:a tap:s"        # hint again, same session
+  inject "tap:f tap:a tap:a"        # hint, first label
+  inject "tap:f tap:a tap:s"        # hint again, same session
   inject "tap:g tap:w tap:Return"   # grid warp, same session
   # `H` is bound in normal mode alone, so landing on the left edge proves the
   # session came back to normal mode and is still taking keys.

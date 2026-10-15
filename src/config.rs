@@ -546,7 +546,8 @@ mod tests {
                 "`{name}` did not bind"
             );
         }
-        // The default is gone.
+        // The old default is gone: the first mention of the option replaces the
+        // defaults, and later mentions add to what is left.
         assert_eq!(config.bindings.normal.get(&parse_key("x").unwrap()), None);
     }
 
@@ -692,7 +693,7 @@ mod consistency {
             ("button_right", Mode::Normal, ".", Action::ClickRight),
             ("drag", Mode::Normal, "v", Action::ToggleDrag),
             ("grid_mode", Mode::Normal, "g", Action::ToGrid),
-            ("hint_mode", Mode::Normal, "x", Action::ToHint),
+            ("hint_mode", Mode::Normal, "f", Action::ToHint),
             ("grid_left", Mode::Grid, "h", Action::GridLeft),
             ("grid_right", Mode::Grid, "l", Action::GridRight),
             ("grid_up", Mode::Grid, "k", Action::GridUp),

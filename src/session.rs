@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn hint_labels_filter_and_warp_on_a_unique_match() {
         let mut session = session();
-        press(&mut session, "x");
+        press(&mut session, "f");
         assert_eq!(session.mode(), Mode::Hint);
         assert!(session.hint().target_count() > 3);
         let label: Vec<char> = {
@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn an_unmatched_hint_key_leaves_the_mode_alone() {
         let mut session = session();
-        press(&mut session, "x");
+        press(&mut session, "f");
         // `z` is not in the label charset.
         press(&mut session, "z");
         assert_eq!(session.mode(), Mode::Hint);
@@ -821,7 +821,7 @@ mod tests {
     #[test]
     fn backspace_with_nothing_typed_leaves_hint_mode() {
         let mut session = session();
-        press(&mut session, "x");
+        press(&mut session, "f");
         press(&mut session, "BackSpace");
         assert_eq!(session.mode(), Mode::Normal);
     }
@@ -881,7 +881,7 @@ mod tests {
         assert!(!session.take_redraw());
 
         // A hint label character only narrows the candidates.
-        press(&mut session, "x");
+        press(&mut session, "f");
         assert!(session.take_redraw(), "entering hint mode drew nothing");
         assert!(press(&mut session, "a").is_empty());
         assert!(session.take_redraw(), "the filtered labels are not shown");

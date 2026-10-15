@@ -151,7 +151,7 @@ impl Default for Bindings {
                 ("period", Action::ClickRight),
                 ("v", Action::ToggleDrag),
                 ("g", Action::ToGrid),
-                ("x", Action::ToHint),
+                ("f", Action::ToHint),
                 ("Escape", Action::Quit),
             ]),
             grid: table(&[

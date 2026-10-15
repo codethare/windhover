@@ -3,9 +3,8 @@
 ## Purpose
 Defines what hint mode does: lay a set of labelled prompts over the screen's
 targets so that typing a label's characters moves the pointer straight onto that
-target. Targets can come from a regular lattice or from the interactive elements
-the accessibility tree reports. It is for the case where the target is known but
-its coordinates are not.
+target. The targets are a regular lattice across the output. It is for the case
+where the target is known but its coordinates are not.
 
 ## Requirements
 
@@ -18,7 +17,7 @@ while typing is enough to position immediately.
 
 #### Scenario: Generating lattice hints
 
-- **WHEN** the user presses `x` in normal mode to enter hint mode
+- **WHEN** the user presses `f` in normal mode to enter hint mode
 - **THEN** the overlay draws a compact label badge at each target position, with
   labels taken from the configured alphabet, and no two labels where one is a
   prefix of the other

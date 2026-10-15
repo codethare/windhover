@@ -67,7 +67,7 @@ drag: v
 
 # Mode entry
 grid_mode: g
-hint_mode: x
+hint_mode: f
 
 # Grid mode
 grid_columns: 2
@@ -112,7 +112,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `scroll_up` `scroll_down` | `u` `d` | Wheel |
 | `button_left` `button_middle` `button_right` | `m` `,` `.` | Click |
 | `drag` | `v` | Hold the left button, or release it |
-| `grid_mode` `hint_mode` | `g` `x` | Enter grid or hint mode |
+| `grid_mode` `hint_mode` | `g` `f` | Enter grid or hint mode |
 | `grid_left` `grid_right` `grid_up` `grid_down` | `h` `l` `k` `j` | Pan the grid region by its own size |
 | `grid_back` `grid_warp` `grid_warp_click` | `BackSpace` `Return` `space` | Undo a shrink, warp, warp and click |
 | `hint_back` | `BackSpace` | Delete a typed label character, or leave hint mode |

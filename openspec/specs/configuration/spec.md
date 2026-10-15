@@ -90,7 +90,7 @@ parentheses as the default: the quit key (`Escape`), the four normal-mode
 direction keys (`h` `j` `k` `l`), the normal-mode step (derived from the output
 size, about 10 logical pixels), the three edge-jump keys (`H` `M` `L`), the three
 mouse-button keys (`m` `,` `.`), the drag toggle (`v`), the keys that enter grid
-and hint mode (`g` `x`), the grid partition (`2x2`), the grid cell key table, the
+and hint mode (`g` `f`), the grid partition (`2x2`), the grid cell key table, the
 grid minimum size, the grid undo key (`BackSpace`), the grid warp key (`Return`),
 the grid warp-and-click key (`Space`), the hint lattice spacing, the hint label
 alphabet, whether to click after a warp (no), the hint editing key (`BackSpace`),

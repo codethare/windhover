@@ -194,7 +194,7 @@ continuous.
 
 #### Scenario: Entering hint mode
 
-- **WHEN** the user presses `x`
+- **WHEN** the user presses `f`
 - **THEN** the session switches to hint mode and the overlay content follows
 
 #### Scenario: Returning from another mode
