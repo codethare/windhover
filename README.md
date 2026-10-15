@@ -91,8 +91,19 @@ compositor while one is running — `Escape` is what gives the keyboard back.
 
 ### One key per press instead
 
-`--oneshot` ends the session when the mode it started in hands over, for a
-binding you press per jump rather than a session you stay in:
+The mode flags start a session in the mode they name, with no normal mode before
+it: `windhover --hint` is a hint session from its first frame. A binding can
+therefore go straight to the mode it wants.
+
+```
+bindsym Mod4+Mod1+x exec windhover --hint
+bindsym Mod4+Mod1+g exec windhover --grid
+```
+
+What such a binding leaves behind is the session: after the jump it is in normal
+mode and still running. That is what the binding above wants when you are happy to
+keep one session — and what `--oneshot` takes away, for a binding you press per
+jump rather than a session you stay in:
 
 ```
 bindsym Mod4+Mod1+x exec windhover --hint --oneshot
@@ -108,8 +119,8 @@ which holds the keyboard and paints its own cursor ring.
 
 ```sh
 windhover            # normal mode, which is the default
-windhover --grid
-windhover --hint
+windhover --grid     # a grid session from its first frame
+windhover --hint     # and a hint session, with no normal mode first
 windhover --hint --oneshot   # one jump, then exit
 ```
 
