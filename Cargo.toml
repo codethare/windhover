@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Keyboard-driven mouse cursor for wlroots-based Wayland compositors"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/codethare/windhover"
 keywords = ["wayland", "mouse", "keyboard", "accessibility"]
 categories = ["accessibility"]
 rust-version = "1.85"
