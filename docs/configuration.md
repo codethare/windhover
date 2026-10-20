@@ -83,7 +83,7 @@ grid_warp: Return
 grid_warp_click: space
 
 # Hint mode
-hint_cell: 110
+hint_cell: 56
 hint_charset: asdfghjkl
 click_after_warp: false
 hint_back: BackSpace
@@ -125,7 +125,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `grid_columns` `grid_rows` | `2` `2` | Partition of the grid region |
 | `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise |
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |
-| `hint_cell` | `110` | Wanted spacing between hint targets, in logical pixels |
+| `hint_cell` | `56` | Wanted spacing between hint targets, in logical pixels |
 | `hint_charset` | `asdfghjkl` | Label alphabet. Labels are all the same length, so the length grows rather than letting one label prefix another |
 | `click_after_warp` | `false` | Click when a hint is selected |
 | `font_family` | `sans-serif` | Resolved through `fc-match`, with a built-in path list as a fallback |

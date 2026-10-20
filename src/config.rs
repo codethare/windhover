@@ -41,7 +41,9 @@ impl Default for Config {
             step: None,
             grid_columns: 2,
             grid_rows: 2,
-            hint_cell: 110.0,
+            // 56 keeps four-character labels, about 45 px wide, from touching
+            // each other: the badge is what limits density, not the output size.
+            hint_cell: 56.0,
             hint_charset: "asdfghjkl".chars().collect(),
             click_after_warp: false,
             theme: Theme::default(),

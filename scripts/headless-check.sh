@@ -386,15 +386,16 @@ cursor_check "grid: warp to the region centre" --grid "tap:w tap:Return" "W*3/4"
 # `space` warps, clicks through the suspended overlay and returns to normal
 # mode; the position proves the batch survived taking the overlay down.
 cursor_check "grid: warp and click through" --grid "tap:w tap:space" "W*3/4" "H/4"
-# The lattice is built at `hint_cell` spacing, so `aa` is the centre of its
-# first cell.
-cursor_check "hint: the first label" --hint "tap:a tap:a" \
-  "(W/(int(W/110)>0?int(W/110):1))*0.5" "(H/(int(H/110)>0?int(H/110):1))*0.5"
+# The lattice is built at `hint_cell` spacing, so `aaa` is the centre of its
+# first cell. Three characters, not two: `hint_cell: 56` on the 1280x720 headless
+# output is 22x12 targets, which is past what one or two characters can name.
+cursor_check "hint: the first label" --hint "tap:a tap:a tap:a" \
+  "(W/(int(W/56)>0?int(W/56):1))*0.5" "(H/(int(H/56)>0?int(H/56):1))*0.5"
 # `H` is bound in normal mode only, so the cursor landing on the left edge is
 # what proves the selection handed over to normal mode instead of staying in the
 # mode it was made in. The same key proves it for a grid warp.
 cursor_check "hint: a selected label lands in normal mode" --hint \
-  "tap:a tap:a mods:shift tap:h mods:" 0 -
+  "tap:a tap:a tap:a mods:shift tap:h mods:" 0 -
 cursor_check "grid: a warp lands in normal mode" --grid \
   "tap:w tap:Return mods:shift tap:h mods:" 0 -
 
@@ -696,8 +697,8 @@ oneshot_check() {
     fail "$NAME: exit status $STATUS"
   fi
 }
-oneshot_check "a one-shot hint session ends itself" "tap:a tap:a"
-oneshot_check "and the next one leaves nothing behind" "tap:a tap:s"
+oneshot_check "a one-shot hint session ends itself" "tap:a tap:a tap:a"
+oneshot_check "and the next one leaves nothing behind" "tap:a tap:a tap:s"
 
 echo "check: a mode that never hands over is refused"
 if "$WINDHOVER" --normal --oneshot >"$RUNTIME/oneshot-bad.out" 2>&1; then
