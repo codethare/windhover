@@ -8,6 +8,10 @@ Keyboard-driven mouse cursor for wlroots-based Wayland compositors.
 
 Three modes, one binary, no daemon:
 
+| normal | grid | hint |
+|---|---|---|
+| ![normal mode: cursor ring and a multiplier badge](docs/screenshots/normal.png) | ![grid mode: the screen split into four labelled quadrants](docs/screenshots/grid.png) | ![hint mode: a full-screen grid of labels](docs/screenshots/hint.png) |
+
 | Mode | Keys |
 |---|---|
 | **normal** | `h` `j` `k` `l` move (hold to accelerate, `Ctrl` for double) · digits are a multiplier · `H` `M` `L` jump to left / middle / right edge · `[` `\` `]` speed presets · `m` `,` `.` left / middle / right click · `v` drag · `g` grid · `f` hint · `Esc` quit |
