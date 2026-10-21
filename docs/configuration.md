@@ -55,6 +55,11 @@ edge_left: H
 edge_middle: M
 edge_right: L
 
+# Speed presets: a fraction of a step, one step, several steps
+speed_fine: [
+speed_normal: \
+speed_coarse: ]
+
 # Wheel
 scroll_up: u
 scroll_down: d
@@ -83,8 +88,7 @@ grid_warp: Return
 grid_warp_click: space
 
 # Hint mode
-hint_cell: 56
-hint_charset: asdfghjkl
+hint_charset: asdfjkl;ghqwertyuiop
 click_after_warp: false
 hint_back: BackSpace
 
@@ -109,6 +113,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `quit` | `Escape` | End the session (bound in every mode) |
 | `normal_left` `normal_right` `normal_up` `normal_down` | `h` `l` `k` `j` | Move one step |
 | `edge_left` `edge_middle` `edge_right` | `H` `M` `L` | Jump to the left edge, the middle, the right edge |
+| `speed_fine` `speed_normal` `speed_coarse` | `[` `\` `]` | Scale every later move and scroll by 0.1, 1 or 4 |
 | `scroll_up` `scroll_down` | `u` `d` | Wheel |
 | `button_left` `button_middle` `button_right` | `m` `,` `.` | Click |
 | `drag` | `v` | Hold the left button, or release it |
@@ -125,8 +130,8 @@ is what lets the shift level of a movement key jump to an edge.
 | `grid_columns` `grid_rows` | `2` `2` | Partition of the grid region |
 | `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise |
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |
-| `hint_cell` | `56` | Wanted spacing between hint targets, in logical pixels |
-| `hint_charset` | `asdfghjkl` | Label alphabet. Labels are all the same length, so the length grows rather than letting one label prefix another |
+| `hint_cell` | derived so the output is filled with `len(hint_charset)²` cells | Wanted spacing between hint cells, in logical pixels. The default keeps every label at two characters; a smaller value raises them to three, and a value that would need more is refused at start |
+| `hint_charset` | `asdfjkl;ghqwertyuiop` | Label alphabet, printable ASCII. Labels are all the same length, so the length grows rather than letting one label prefix another |
 | `click_after_warp` | `false` | Click when a hint is selected |
 | `font_family` | `sans-serif` | Resolved through `fc-match`, with a built-in path list as a fallback |
 | `accent` `text` `panel` | macOS dark palette | `RRGGBB` or `RRGGBBAA`, with or without a leading `#` |

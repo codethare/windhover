@@ -8,6 +8,12 @@ use crate::wl::pointer::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 /// without bound.
 pub const MAX_MULTIPLIER: u32 = 999;
 
+/// The three speeds a preset selects. Fine is what closes the gap a coarse hint
+/// cell leaves; coarse is for crossing the screen without holding a key.
+pub const SPEED_FINE: f64 = 0.1;
+pub const SPEED_NORMAL: f64 = 1.0;
+pub const SPEED_COARSE: f64 = 4.0;
+
 /// What normal mode needs from the session to decide an effect.
 #[derive(Debug, Clone, Copy)]
 pub struct Context {
@@ -76,6 +82,9 @@ impl Normal {
                 x: context.screen.0 as f64,
                 y: context.cursor.1,
             }],
+            Action::SpeedFine => vec![Effect::Speed(SPEED_FINE)],
+            Action::SpeedNormal => vec![Effect::Speed(SPEED_NORMAL)],
+            Action::SpeedCoarse => vec![Effect::Speed(SPEED_COARSE)],
             Action::ScrollUp => vec![Effect::Scroll {
                 steps: -(multiplier as i32),
             }],
@@ -136,6 +145,25 @@ mod tests {
 
     fn normal() -> Normal {
         Normal::default()
+    }
+
+    #[test]
+    fn a_preset_reports_the_speed_it_sets() {
+        let mut mode = normal();
+        let context = context();
+        assert_eq!(
+            mode.on_action(Action::SpeedFine, &context),
+            vec![Effect::Speed(SPEED_FINE)]
+        );
+        assert_eq!(
+            mode.on_action(Action::SpeedCoarse, &context),
+            vec![Effect::Speed(SPEED_COARSE)]
+        );
+        assert_eq!(
+            mode.on_action(Action::SpeedNormal, &context),
+            vec![Effect::Speed(1.0)]
+        );
+        assert!(SPEED_FINE < 1.0 && SPEED_COARSE > 1.0, "the presets do not bracket one step");
     }
 
     #[test]

@@ -377,6 +377,12 @@ cursor_check "normal: a 10x prefix" --normal \
 # events, so this is the check that the fast step is wired up.
 cursor_check "normal: the fast modifier doubles the step" --normal \
   "mods:shift tap:h mods: mods:ctrl tap:l mods:" "2*s" -
+# A preset scales the base step rather than replacing it, and it outlives the
+# press that selected it, so the move after the selector is the one that shows it.
+cursor_check "normal: the coarse preset multiplies the step" --normal \
+  "mods:shift tap:h mods: tap:bracketright tap:l" "4*s" -
+cursor_check "normal: the fine preset divides the step" --normal \
+  "mods:shift tap:h mods: tap:bracketleft tap:l" "s/10" -
 # `W - 1`: the session addresses the last pixel column, not one past it.
 cursor_check "normal: jump to the right edge" --normal \
   "mods:shift tap:l mods:" "W-1" -
@@ -386,16 +392,17 @@ cursor_check "grid: warp to the region centre" --grid "tap:w tap:Return" "W*3/4"
 # `space` warps, clicks through the suspended overlay and returns to normal
 # mode; the position proves the batch survived taking the overlay down.
 cursor_check "grid: warp and click through" --grid "tap:w tap:space" "W*3/4" "H/4"
-# The lattice is built at `hint_cell` spacing, so `aaa` is the centre of its
-# first cell. Three characters, not two: `hint_cell: 56` on the 1280x720 headless
-# output is 22x12 targets, which is past what one or two characters can name.
-cursor_check "hint: the first label" --hint "tap:a tap:a tap:a" \
-  "(W/(int(W/56)>0?int(W/56):1))*0.5" "(H/(int(H/56)>0?int(H/56):1))*0.5"
+# The default lattice fills the output with as many cells as the alphabet can
+# name in two characters, so the spacing is `sqrt(W*H/400)` and the first label
+# (`aa`) sits at the centre of the first cell.
+cursor_check "hint: the first label" --hint "tap:a tap:a" \
+  "(W/(int(W/sqrt(W*H/400))>0?int(W/sqrt(W*H/400)):1))*0.5" \
+  "(H/(int(H/sqrt(W*H/400))>0?int(H/sqrt(W*H/400)):1))*0.5"
 # `H` is bound in normal mode only, so the cursor landing on the left edge is
 # what proves the selection handed over to normal mode instead of staying in the
 # mode it was made in. The same key proves it for a grid warp.
 cursor_check "hint: a selected label lands in normal mode" --hint \
-  "tap:a tap:a tap:a mods:shift tap:h mods:" 0 -
+  "tap:a tap:a mods:shift tap:h mods:" 0 -
 cursor_check "grid: a warp lands in normal mode" --grid \
   "tap:w tap:Return mods:shift tap:h mods:" 0 -
 
@@ -697,8 +704,25 @@ oneshot_check() {
     fail "$NAME: exit status $STATUS"
   fi
 }
-oneshot_check "a one-shot hint session ends itself" "tap:a tap:a tap:a"
-oneshot_check "and the next one leaves nothing behind" "tap:a tap:a tap:s"
+oneshot_check "a one-shot hint session ends itself" "tap:a tap:a"
+oneshot_check "and the next one leaves nothing behind" "tap:a tap:s"
+
+echo "check: a hint lattice too dense to label is refused"
+# Twenty characters name 8000 cells in three characters; ten-pixel cells on this
+# output are 9216. A session that dropped targets or repeated labels instead
+# would look like it worked, so the refusal is what is being checked, not the
+# exit status on its own.
+printf 'hint_cell: 10\n' >"$RUNTIME/dense-hint"
+DENSE_STATUS=0
+timeout 5 "$WINDHOVER" --config "$RUNTIME/dense-hint" --hint >"$RUNTIME/dense-hint.out" 2>&1 || DENSE_STATUS=$?
+if [ "$DENSE_STATUS" = "124" ]; then
+  fail "a lattice needing four characters started a session and kept running"
+  pkill -f "$RUNTIME/dense-hint" 2>/dev/null || true
+elif grep -q "hint_cell" "$RUNTIME/dense-hint.out"; then
+  pass "a lattice too dense to label is refused — $(head -1 "$RUNTIME/dense-hint.out")"
+else
+  fail "the refusal does not name the option: $(cat "$RUNTIME/dense-hint.out")"
+fi
 
 echo "check: a mode that never hands over is refused"
 if "$WINDHOVER" --normal --oneshot >"$RUNTIME/oneshot-bad.out" 2>&1; then

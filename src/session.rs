@@ -11,6 +11,7 @@ use anyhow::Result;
 use xkbcommon::xkb;
 
 use crate::config::Config;
+use crate::hint::labels;
 use crate::hint::lattice::Lattice;
 use crate::keys::{Action, Keysym};
 use crate::mode::grid::Grid;
@@ -106,6 +107,8 @@ pub struct Session {
     grid: Grid,
     hint: Hint,
     cell_labels: Vec<String>,
+    /// The factor every movement and scroll is scaled by: the speed preset.
+    speed: f64,
     /// Keys held down that repeat, with the time their next repeat is due.
     held: Vec<Held>,
     /// With `--oneshot`, the hand-over that ends grid or hint mode ends the
@@ -130,6 +133,7 @@ impl Session {
             grid: Grid::new(screen, 2, 2, 40.0),
             hint: Hint::default(),
             cell_labels: Vec::new(),
+            speed: 1.0,
             held: Vec::new(),
             oneshot,
             keyboard_lost_at: None,
@@ -196,7 +200,7 @@ impl Session {
     }
 
     fn step(&self) -> f64 {
-        self.config.step_for(self.screen)
+        self.config.step_for(self.screen) * self.speed
     }
 
     fn context(&self) -> Context {
@@ -405,6 +409,7 @@ impl Session {
                     self.warp_cursor(self.cursor.0 + dx, self.cursor.1 + dy);
                 }
                 Effect::Warp { x, y } => self.warp_cursor(*x, *y),
+                Effect::Speed(speed) => self.speed = *speed,
                 Effect::Switch(mode) => self.switch(*mode),
                 Effect::Exit => self.held.clear(),
                 _ => {}
@@ -464,10 +469,10 @@ impl Session {
 
     fn reset_hint(&mut self) {
         let lattice = Lattice {
-            cell: self.config.hint_cell,
+            cell: self.config.hint_cell_for(self.screen),
         };
-        let points = lattice.targets(self.screen);
-        self.hint = Hint::new(points, &self.config.hint_charset);
+        let cells = lattice.cells(self.screen);
+        self.hint = Hint::new(cells, &self.config.hint_charset);
     }
 
     pub fn frame(&self, scale: f32) -> Frame<'_> {
@@ -476,6 +481,7 @@ impl Session {
             .then(|| self.normal.multiplier())
             .flatten();
         frame.dragging = self.normal.dragging();
+        frame.speed = self.speed;
         if self.mode == Mode::Grid {
             frame.grid = Some(GridFrame {
                 grid: &self.grid,
@@ -518,6 +524,28 @@ fn printable(keysym: Keysym) -> Option<char> {
     }
 }
 
+/// Why the hint lattice cannot be labelled on this output, if it cannot.
+///
+/// The cell count follows the output size, so the label budget is checked with
+/// the output in hand rather than in the file parser.
+fn hint_density_error(config: &Config, screen: (u32, u32)) -> Option<String> {
+    let cells = Lattice {
+        cell: config.hint_cell_for(screen),
+    }
+    .cells(screen)
+    .len();
+    let length = labels::length(cells, &config.hint_charset);
+    (length > labels::MAX_LENGTH).then(|| {
+        format!(
+            "`hint_cell` asks for {cells} hint targets on this {}x{} output, which needs \
+             {length} characters per label; the most a label may carry is {}",
+            screen.0,
+            screen.1,
+            labels::MAX_LENGTH
+        )
+    })
+}
+
 pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) -> Result<()> {
     // Read the configuration before connecting: a bad `--config` path should
     // fail immediately rather than after the overlay has taken the keyboard.
@@ -539,6 +567,9 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
             config.grid_columns * config.grid_rows,
             config.bindings.grid_cells.len()
         );
+    }
+    if let Some(message) = hint_density_error(&config, screen) {
+        anyhow::bail!("{message}");
     }
 
     let mut session = Session::new(screen, config, oneshot);
@@ -640,7 +671,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                 Effect::Click { button } => wl.click(button)?,
                 Effect::Scroll { steps } => wl.scroll(steps)?,
                 Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
-                Effect::Switch(_) => {}
+                Effect::Switch(_) | Effect::Speed(_) => {}
                 Effect::Exit => exit = true,
             }
         }
@@ -686,6 +717,55 @@ mod tests {
 
     fn one_shot_session() -> Session {
         Session::new((1280, 720), Config::default(), true)
+    }
+
+    #[test]
+    fn a_lattice_too_dense_to_label_is_named() {
+        let config = Config::default();
+        assert_eq!(hint_density_error(&config, (1280, 720)), None);
+        let dense = Config {
+            hint_cell: Some(10.0),
+            ..Config::default()
+        };
+        let message = hint_density_error(&dense, (1280, 720)).expect("no refusal");
+        assert!(message.contains("hint_cell"), "{message}");
+        assert!(message.contains("4 characters"), "{message}");
+        assert!(message.contains("9216"), "{message}");
+    }
+
+    fn move_dx(effects: &[Effect]) -> f64 {
+        effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Move { dx, .. } => Some(*dx),
+                _ => None,
+            })
+            .expect("no move")
+    }
+
+    #[test]
+    fn a_preset_scales_the_step_a_move_uses() {
+        let mut session = session();
+        let step = session.step();
+        assert_eq!(press(&mut session, "bracketright"), vec![Effect::Speed(4.0)]);
+        assert_eq!(move_dx(&press(&mut session, "l")), step * 4.0);
+        assert_eq!(press(&mut session, "bracketleft"), vec![Effect::Speed(0.1)]);
+        assert_eq!(move_dx(&press(&mut session, "l")), step * 0.1);
+        assert_eq!(press(&mut session, "backslash"), vec![Effect::Speed(1.0)]);
+        assert_eq!(move_dx(&press(&mut session, "l")), step);
+    }
+
+    #[test]
+    fn a_preset_survives_a_hand_over() {
+        let mut session = session();
+        let step = session.step();
+        press(&mut session, "bracketleft");
+        press(&mut session, "f");
+        assert_eq!(session.mode(), Mode::Hint);
+        // Backspace with nothing typed is the way back to normal mode.
+        press(&mut session, "BackSpace");
+        assert_eq!(session.mode(), Mode::Normal);
+        assert!(move_dx(&press(&mut session, "l")).abs() < step * 0.5);
     }
 
     fn press(session: &mut Session, name: &str) -> Vec<Effect> {
@@ -942,7 +1022,8 @@ mod tests {
         session.switch_to(Mode::Hint);
         let (x, y, label) = {
             let visible = session.hint().visible();
-            (visible[0].0.x, visible[0].0.y, visible[0].0.label.clone())
+            let (x, y) = visible[0].0.cell.centre();
+            (x, y, visible[0].0.label.clone())
         };
         for (index, ch) in label.chars().enumerate() {
             let effects = press(&mut session, &ch.to_string());

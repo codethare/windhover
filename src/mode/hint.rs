@@ -1,5 +1,6 @@
 //! Hint mode: labelled targets, prefix filtering, warp on unique match.
 
+use crate::hint::lattice::Cell;
 use crate::hint::labels;
 use crate::keys::Action;
 use crate::mode::{Effect, Mode};
@@ -7,8 +8,7 @@ use crate::wl::pointer::BTN_LEFT;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
-    pub x: f64,
-    pub y: f64,
+    pub cell: Cell,
     pub label: String,
 }
 
@@ -19,12 +19,12 @@ pub struct Hint {
 }
 
 impl Hint {
-    pub fn new(points: Vec<(f64, f64)>, charset: &[char]) -> Self {
-        let labels = labels::assign(points.len(), charset);
-        let targets = points
+    pub fn new(cells: Vec<Cell>, charset: &[char]) -> Self {
+        let labels = labels::assign(cells.len(), charset);
+        let targets = cells
             .into_iter()
             .zip(labels)
-            .map(|((x, y), label)| Target { x, y, label })
+            .map(|(cell, label)| Target { cell, label })
             .collect();
         Self {
             targets,
@@ -74,10 +74,8 @@ impl Hint {
             return vec![];
         };
 
-        let mut effects = vec![Effect::Warp {
-            x: target.x,
-            y: target.y,
-        }];
+        let (x, y) = target.cell.centre();
+        let mut effects = vec![Effect::Warp { x, y }];
         if click_after_warp {
             effects.push(Effect::Click { button: BTN_LEFT });
         }
@@ -114,10 +112,15 @@ mod tests {
     }
 
     fn hint(count: usize) -> Hint {
-        let points = (0..count)
-            .map(|i| ((i as f64 + 0.5) * 10.0, (i as f64 + 0.5) * 7.0))
+        let cells = (0..count)
+            .map(|i| Cell {
+                x: i as f64 * 10.0,
+                y: i as f64 * 7.0,
+                w: 10.0,
+                h: 7.0,
+            })
             .collect();
-        Hint::new(points, &charset())
+        Hint::new(cells, &charset())
     }
 
     #[test]
@@ -153,18 +156,13 @@ mod tests {
     fn a_unique_match_warps_and_returns_to_normal_mode() {
         let mut hint = hint(10);
         let target = hint.targets[0].clone();
+        let (x, y) = target.cell.centre();
         for ch in target.label.chars() {
             let effects = hint.on_char(ch, false);
             if !effects.is_empty() {
                 assert_eq!(
                     effects,
-                    vec![
-                        Effect::Warp {
-                            x: target.x,
-                            y: target.y
-                        },
-                        Effect::Switch(Mode::Normal)
-                    ]
+                    vec![Effect::Warp { x, y }, Effect::Switch(Mode::Normal)]
                 );
                 return;
             }
@@ -176,16 +174,14 @@ mod tests {
     fn clicking_after_warp_clicks_between_the_warp_and_the_handover() {
         let mut hint = hint(10);
         let target = hint.targets[0].clone();
+        let (x, y) = target.cell.centre();
         for ch in target.label.chars() {
             let effects = hint.on_char(ch, true);
             if !effects.is_empty() {
                 assert_eq!(
                     effects,
                     vec![
-                        Effect::Warp {
-                            x: target.x,
-                            y: target.y
-                        },
+                        Effect::Warp { x, y },
                         Effect::Click { button: BTN_LEFT },
                         Effect::Switch(Mode::Normal)
                     ]

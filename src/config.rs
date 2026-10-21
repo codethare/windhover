@@ -22,10 +22,12 @@ pub struct Config {
     pub step: Option<f64>,
     pub grid_columns: u32,
     pub grid_rows: u32,
-    /// Wanted spacing between hint targets, in logical pixels.
-    pub hint_cell: f64,
-    /// Characters hint labels are built from. Home-row letters by default, so
-    /// the labels are reachable without looking down.
+    /// Wanted spacing between hint targets, in logical pixels. `None` means
+    /// "derive it from the alphabet", which is what keeps the labels at two
+    /// characters on a laptop panel and on a 4K monitor alike.
+    pub hint_cell: Option<f64>,
+    /// Characters hint labels are built from: twenty keys around the home row,
+    /// so a two-character label is reachable without looking down.
     pub hint_charset: Vec<char>,
     pub click_after_warp: bool,
     pub theme: Theme,
@@ -41,10 +43,9 @@ impl Default for Config {
             step: None,
             grid_columns: 2,
             grid_rows: 2,
-            // 56 keeps four-character labels, about 45 px wide, from touching
-            // each other: the badge is what limits density, not the output size.
-            hint_cell: 56.0,
-            hint_charset: "asdfghjkl".chars().collect(),
+            // Derived, not fixed: see `hint_cell_for`.
+            hint_cell: None,
+            hint_charset: "asdfjkl;ghqwertyuiop".chars().collect(),
             click_after_warp: false,
             theme: Theme::default(),
             grid_min_span: 40.0,
@@ -72,6 +73,18 @@ impl Config {
     pub fn step_for(&self, screen: (u32, u32)) -> f64 {
         self.step
             .unwrap_or_else(|| (screen.1 as f64 / 72.0).max(4.0))
+    }
+
+    /// The hint spacing actually used on this output: the configured value, or
+    /// the spacing that fills the output with exactly as many cells as the
+    /// alphabet can name in two characters. Two characters are what the label
+    /// length should be, so the budget is what sets the density, not the screen.
+    pub fn hint_cell_for(&self, screen: (u32, u32)) -> f64 {
+        self.hint_cell.unwrap_or_else(|| {
+            let area = screen.0 as f64 * screen.1 as f64;
+            let budget = self.hint_charset.len().max(1) as f64;
+            (area / (budget * budget)).sqrt().max(1.0)
+        })
     }
 
     /// The grid cell keys, in row-major order, for a given partition. Returns
@@ -197,14 +210,14 @@ impl Loader {
                 }
                 self.config.bindings.grid_cells = keys;
             }
-            "hint_cell" => self.config.hint_cell = number(value, 1.0, f64::MAX)?,
+            "hint_cell" => self.config.hint_cell = Some(number(value, 1.0, f64::MAX)?),
             "hint_charset" => {
                 let charset: Vec<char> = value.chars().filter(|ch| !ch.is_whitespace()).collect();
                 if charset.is_empty() {
                     return Err("`hint_charset` needs at least one character".to_string());
                 }
-                if charset.iter().any(|ch| !ch.is_ascii_alphanumeric()) {
-                    return Err("`hint_charset` must be letters or digits".to_string());
+                if charset.iter().any(|ch| !ch.is_ascii_graphic()) {
+                    return Err("`hint_charset` must be printable ASCII".to_string());
                 }
                 self.config.hint_charset = charset;
             }
@@ -261,6 +274,9 @@ fn action_for(option: &str) -> Option<Action> {
         "edge_left" => Action::EdgeLeft,
         "edge_middle" => Action::EdgeMiddle,
         "edge_right" => Action::EdgeRight,
+        "speed_fine" => Action::SpeedFine,
+        "speed_normal" => Action::SpeedNormal,
+        "speed_coarse" => Action::SpeedCoarse,
         "scroll_up" => Action::ScrollUp,
         "scroll_down" => Action::ScrollDown,
         "button_left" => Action::ClickLeft,
@@ -291,6 +307,9 @@ fn action_option(action: Action) -> &'static str {
         Action::EdgeLeft => "edge_left",
         Action::EdgeMiddle => "edge_middle",
         Action::EdgeRight => "edge_right",
+        Action::SpeedFine => "speed_fine",
+        Action::SpeedNormal => "speed_normal",
+        Action::SpeedCoarse => "speed_coarse",
         Action::ScrollUp => "scroll_up",
         Action::ScrollDown => "scroll_down",
         Action::ClickLeft => "button_left",
@@ -435,14 +454,51 @@ mod tests {
     fn an_empty_charset_or_cell_list_is_rejected() {
         assert!(!warns("hint_charset: \n").is_empty());
         assert!(!warns("grid_cells: \n").is_empty());
-        assert!(!warns("hint_charset: a-b\n").is_empty());
+        assert!(!warns("hint_charset: \u{e9}\n").is_empty());
+    }
+
+    #[test]
+    fn the_default_alphabet_is_twenty_printable_characters() {
+        let charset = &Config::default().hint_charset;
+        assert_eq!(charset.len(), 20);
+        assert!(charset.contains(&';'));
+        assert!(charset.iter().all(|ch| ch.is_ascii_graphic()));
+    }
+
+    #[test]
+    fn punctuation_is_accepted_in_the_alphabet() {
+        let (config, warnings) = one("hint_charset", "asdf;jkl");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.hint_charset, "asdf;jkl".chars().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_default_spacing_fills_the_output_with_two_character_labels() {
+        // 20 x 20 cells, whatever the output: the label length is the same on a
+        // laptop panel and on a 4K monitor.
+        let config = Config::default();
+        for screen in [(1920, 1080), (2560, 1440), (3840, 2160)] {
+            let cell = config.hint_cell_for(screen);
+            let columns = (screen.0 as f64 / cell).floor() as usize;
+            let rows = (screen.1 as f64 / cell).floor() as usize;
+            assert!(
+                columns * rows <= 400,
+                "{screen:?} gave {} cells",
+                columns * rows
+            );
+            assert_eq!(
+                crate::hint::labels::length(columns * rows, &config.hint_charset),
+                2,
+                "{screen:?} needed more than two characters"
+            );
+        }
     }
 
     #[test]
     fn numbers_and_booleans_are_read() {
         assert_eq!(one("step", "33").0.step, Some(33.0));
         assert_eq!(one("grid_columns", "3").0.grid_columns, 3);
-        assert_eq!(one("hint_cell", "80").0.hint_cell, 80.0);
+        assert_eq!(one("hint_cell", "80").0.hint_cell, Some(80.0));
         assert!(one("click_after_warp", "yes").0.click_after_warp);
         assert!(one("click_after_warp", "TRUE").0.click_after_warp);
         assert!(!one("click_after_warp", "off").0.click_after_warp);
@@ -688,6 +744,9 @@ mod consistency {
             ("edge_left", Mode::Normal, "H", Action::EdgeLeft),
             ("edge_middle", Mode::Normal, "M", Action::EdgeMiddle),
             ("edge_right", Mode::Normal, "L", Action::EdgeRight),
+            ("speed_fine", Mode::Normal, "[", Action::SpeedFine),
+            ("speed_normal", Mode::Normal, "\\", Action::SpeedNormal),
+            ("speed_coarse", Mode::Normal, "]", Action::SpeedCoarse),
             ("scroll_up", Mode::Normal, "u", Action::ScrollUp),
             ("scroll_down", Mode::Normal, "d", Action::ScrollDown),
             ("button_left", Mode::Normal, "m", Action::ClickLeft),

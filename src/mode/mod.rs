@@ -27,6 +27,8 @@ pub enum Effect {
     Scroll { steps: i32 },
     /// Hold or release the left button with no matching release, for dragging.
     Drag(bool),
+    /// The factor every later movement and scroll is scaled by.
+    Speed(f64),
     Switch(Mode),
     Exit,
 }

@@ -1,5 +1,21 @@
 //! Prefix-free label assignment over the configured character set.
 
+/// The most characters a label may carry. Three name 8000 cells with the default
+/// alphabet, past any output at a legible cell size, so this guards against a
+/// nonsensical configuration rather than limiting anyone. The session refuses a
+/// configuration that would need more; [`assign`] itself has no ceiling.
+pub const MAX_LENGTH: usize = 3;
+
+/// The shortest length at which `charset` can name `count` distinct labels.
+pub fn length(count: usize, charset: &[char]) -> usize {
+    let base = charset.len();
+    let mut length = 1;
+    while base.saturating_pow(length as u32) < count {
+        length += 1;
+    }
+    length
+}
+
 /// Fixed-length labels over `charset`.
 ///
 /// Because every label is the same length, no label can be a prefix of another,
@@ -9,13 +25,7 @@ pub fn assign(count: usize, charset: &[char]) -> Vec<String> {
     if count == 0 || charset.is_empty() {
         return Vec::new();
     }
-    let base = charset.len();
-    // Cap the length so a nonsense configuration cannot ask for a label longer
-    // than the screen could ever need.
-    let mut length = 1usize;
-    while length < 8 && base.saturating_pow(length as u32) < count {
-        length += 1;
-    }
+    let length = length(count, charset);
     (0..count).map(|i| label(i, length, charset)).collect()
 }
 
@@ -34,6 +44,20 @@ mod tests {
 
     fn charset() -> Vec<char> {
         "asdfghjkl".chars().collect()
+    }
+
+    fn twenty() -> Vec<char> {
+        "asdfjkl;ghqwertyuiop".chars().collect()
+    }
+
+    #[test]
+    fn twenty_characters_name_a_full_lattice_in_two() {
+        // 400 cells is the default budget: 20 x 20.
+        assert_eq!(length(400, &twenty()), 2);
+        assert_eq!(length(401, &twenty()), 3);
+        assert_eq!(length(8000, &twenty()), 3);
+        assert!(length(8001, &twenty()) > MAX_LENGTH);
+        assert!(assign(400, &twenty()).iter().all(|l| l.chars().count() == 2));
     }
 
     #[test]

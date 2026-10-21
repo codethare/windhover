@@ -21,6 +21,8 @@ pub struct Frame<'a> {
     pub cursor: (f64, f64),
     pub multiplier: Option<u32>,
     pub dragging: bool,
+    /// The speed preset the session is moving at. `1.0` is unlabelled.
+    pub speed: f64,
     pub grid: Option<GridFrame<'a>>,
     pub hint: Option<HintFrame<'a>>,
 }
@@ -42,6 +44,7 @@ impl<'a> Frame<'a> {
             cursor,
             multiplier: None,
             dragging: false,
+            speed: 1.0,
             grid: None,
             hint: None,
         }
@@ -120,11 +123,30 @@ fn draw_hint(
     view: &HintFrame<'_>,
 ) {
     for (target, matched) in view.hint.visible() {
+        let cell = target.cell;
+        // The cell is what makes a target a region rather than a point; it is
+        // translucent, so the thing being aimed at stays visible through it.
+        canvas.panel_with_edge(
+            cell.x as f32 * scale,
+            cell.y as f32 * scale,
+            cell.w as f32 * scale,
+            cell.h as f32 * scale,
+            theme.badge_radius * scale,
+            theme.hint_cell(),
+            theme.panel_edge,
+            theme.hairline * scale,
+        );
+        // The label keeps a panel of its own: white text on a translucent fill is
+        // unreadable over a light background, and the fill cannot be opaque
+        // without hiding the target.
         badge(
             canvas,
             theme,
             fonts,
-            (target.x as f32, target.y as f32),
+            (
+                (cell.x + cell.w / 2.0) as f32,
+                (cell.y + cell.h / 2.0) as f32,
+            ),
             &target.label,
             matched,
             scale,
@@ -218,12 +240,20 @@ fn draw_cursor(canvas: &mut Canvas, theme: &Theme, scale: f32, cursor: (f64, f64
 /// The one status element: only there when it says something the cursor ring
 /// does not.
 fn draw_status(canvas: &mut Canvas, theme: &Theme, fonts: &mut Option<Fonts>, frame: &Frame<'_>) {
-    let text = match (frame.dragging, frame.multiplier) {
-        (true, Some(multiplier)) => format!("drag ×{multiplier}"),
-        (true, None) => "drag".to_string(),
-        (false, Some(multiplier)) => format!("×{multiplier}"),
-        (false, None) => return,
-    };
+    let mut parts: Vec<String> = Vec::new();
+    if frame.dragging {
+        parts.push("drag".to_string());
+    }
+    if let Some(multiplier) = frame.multiplier {
+        parts.push(format!("×{multiplier}"));
+    }
+    if frame.speed != 1.0 {
+        parts.push(format!("{}×", frame.speed));
+    }
+    if parts.is_empty() {
+        return;
+    }
+    let text = parts.join(" ");
     let Some(fonts) = fonts.as_mut() else {
         return;
     };
@@ -261,6 +291,7 @@ fn draw_status(canvas: &mut Canvas, theme: &Theme, fonts: &mut Option<Fonts>, fr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hint::lattice::Cell;
     use crate::mode::grid::Grid;
     use crate::mode::hint::Hint;
 
@@ -353,19 +384,73 @@ mod tests {
     }
 
     #[test]
-    fn a_hint_frame_puts_a_badge_on_every_target() {
+    fn a_hint_frame_draws_a_translucent_cell_per_target() {
         let mut bytes = buffer(640, 360);
         let mut canvas = Canvas::new(&mut bytes, 640, 360).unwrap();
         let theme = Theme::default();
         let (mut fonts, _) = Fonts::load("sans-serif");
-        let hint = Hint::new(vec![(100.0, 100.0), (400.0, 200.0)], &"as".chars().collect::<Vec<_>>());
+        let cells = vec![
+            Cell {
+                x: 40.0,
+                y: 40.0,
+                w: 120.0,
+                h: 120.0,
+            },
+            Cell {
+                x: 340.0,
+                y: 140.0,
+                w: 120.0,
+                h: 120.0,
+            },
+        ];
+        let hint = Hint::new(cells, &"as".chars().collect::<Vec<_>>());
         let mut frame = Frame::normal(1.0, (0.0, 0.0));
         frame.hint = Some(HintFrame { hint: &hint });
         draw(&mut canvas, &theme, &mut fonts, &frame);
 
-        assert!(alpha_at(&bytes, 640, 100, 100) > 200, "no badge on target 0");
-        assert!(alpha_at(&bytes, 640, 400, 200) > 200, "no badge on target 1");
-        assert_eq!(alpha_at(&bytes, 640, 250, 300), 0, "something was drawn elsewhere");
+        // The interior of each cell is its fill: translucent, so what is under it
+        // stays readable, and present, so the cell reads as a target region.
+        let fill = alpha_at(&bytes, 640, 45, 45);
+        assert_eq!(fill, theme.hint_cell().a, "cell 0 was not filled");
+        assert!(fill < 0x80, "the fill is not translucent: {fill}");
+        assert_eq!(alpha_at(&bytes, 640, 345, 145), fill, "cell 1 was not filled");
+        // Its edge is the hairline, which is stronger than the fill.
+        assert!(alpha_at(&bytes, 640, 40, 100) > fill, "cell 0 has no edge");
+        // And nothing is drawn between the cells.
+        assert_eq!(alpha_at(&bytes, 640, 250, 40), 0, "something was drawn outside");
+        // The label sits inside the cell, not on top of its edge.
+        let label_pixels = (60..140)
+            .map(|x| alpha_at(&bytes, 640, x, 100))
+            .max()
+            .unwrap_or(0);
+        assert!(label_pixels > fill, "no label in cell 0");
+    }
+
+    #[test]
+    fn a_speed_preset_is_named_beside_the_cursor() {
+        // The status element is the only thing that can tell the user a session
+        // was left slow, so it has to appear for a preset and stay away for the
+        // normal one.
+        let painted = |speed: f64| -> usize {
+            let mut bytes = buffer(400, 200);
+            let mut canvas = Canvas::new(&mut bytes, 400, 200).unwrap();
+            let theme = Theme::default();
+            let (mut fonts, _) = Fonts::load("sans-serif");
+            let mut frame = Frame::normal(1.0, (50.0, 50.0));
+            frame.speed = speed;
+            draw(&mut canvas, &theme, &mut fonts, &frame);
+            // The status sits down and to the right of the cursor ring, which
+            // never reaches past (60, 60).
+            (60..200)
+                .map(|y| {
+                    (60..400)
+                        .filter(|x| alpha_at(&bytes, 400, *x, y) > 0)
+                        .count()
+                })
+                .sum()
+        };
+        assert!(painted(0.1) > 0, "the fine preset is not shown");
+        assert_eq!(painted(1.0), 0, "the normal preset is labelled anyway");
     }
 
     #[test]

@@ -3,6 +3,21 @@
 /// A point of interest, in logical coordinates relative to the overlay.
 pub type Point = (f64, f64);
 
+/// One cell of the lattice, in logical coordinates relative to the overlay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cell {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Cell {
+    pub fn centre(&self) -> Point {
+        (self.x + self.w / 2.0, self.y + self.h / 2.0)
+    }
+}
+
 /// Target points on a regular lattice across the output, one at the centre of
 /// each cell. `cell` is the wanted spacing in logical pixels, so the number of
 /// targets follows the output size instead of being fixed.
@@ -21,19 +36,27 @@ impl Lattice {
 }
 
 impl Lattice {
-    /// Target points inside an output of `screen` logical pixels.
-    pub fn targets(&self, screen: (u32, u32)) -> Vec<Point> {
+    /// The cells that tile the output, row major. The cells are distributed
+    /// evenly, so they cover the output exactly at whatever spacing the wanted
+    /// cell size rounds to.
+    pub fn cells(&self, screen: (u32, u32)) -> Vec<Cell> {
         let (columns, rows) = self.dimensions(screen);
-        let mut points = Vec::with_capacity(columns * rows);
+        let (w, h) = (
+            screen.0 as f64 / columns as f64,
+            screen.1 as f64 / rows as f64,
+        );
+        let mut cells = Vec::with_capacity(columns * rows);
         for row in 0..rows {
             for column in 0..columns {
-                points.push((
-                    (column as f64 + 0.5) * screen.0 as f64 / columns as f64,
-                    (row as f64 + 0.5) * screen.1 as f64 / rows as f64,
-                ));
+                cells.push(Cell {
+                    x: column as f64 * w,
+                    y: row as f64 * h,
+                    w,
+                    h,
+                });
             }
         }
-        points
+        cells
     }
 }
 
@@ -45,14 +68,15 @@ mod tests {
     fn a_smaller_cell_produces_more_targets() {
         let coarse = Lattice { cell: 200.0 };
         let fine = Lattice { cell: 50.0 };
-        assert!(fine.targets((1280, 720)).len() > coarse.targets((1280, 720)).len());
+        assert!(fine.cells((1280, 720)).len() > coarse.cells((1280, 720)).len());
     }
 
     #[test]
-    fn targets_sit_inside_the_output() {
-        let points = Lattice { cell: 110.0 }.targets((1280, 720));
-        assert!(!points.is_empty());
-        for (x, y) in points {
+    fn a_target_sits_inside_the_output() {
+        let cells = Lattice { cell: 110.0 }.cells((1280, 720));
+        assert!(!cells.is_empty());
+        for cell in cells {
+            let (x, y) = cell.centre();
             assert!(x > 0.0 && x < 1280.0, "x = {x}");
             assert!(y > 0.0 && y < 720.0, "y = {y}");
         }
@@ -61,23 +85,41 @@ mod tests {
     #[test]
     fn targets_are_centred_in_their_cells() {
         // Two columns (1280 / 640) and one row (720 / 640 rounds down).
-        let lattice = Lattice { cell: 640.0 };
-        let points = lattice.targets((1280, 720));
-        assert_eq!(points, vec![(320.0, 360.0), (960.0, 360.0)]);
+        let cells = Lattice { cell: 640.0 }.cells((1280, 720));
+        let centres: Vec<Point> = cells.iter().map(Cell::centre).collect();
+        assert_eq!(centres, vec![(320.0, 360.0), (960.0, 360.0)]);
     }
 
     #[test]
     fn a_square_output_with_a_quarter_cell_gives_a_square_lattice() {
-        let lattice = Lattice { cell: 320.0 };
-        let points = lattice.targets((640, 640));
-        assert_eq!(points.len(), 4);
-        assert_eq!(points[0], (160.0, 160.0));
-        assert_eq!(points[3], (480.0, 480.0));
+        let cells = Lattice { cell: 320.0 }.cells((640, 640));
+        assert_eq!(cells.len(), 4);
+        assert_eq!(cells[0].centre(), (160.0, 160.0));
+        assert_eq!(cells[3].centre(), (480.0, 480.0));
     }
 
     #[test]
     fn an_absurd_cell_still_yields_one_target() {
-        let lattice = Lattice { cell: 100_000.0 };
-        assert_eq!(lattice.targets((1280, 720)), vec![(640.0, 360.0)]);
+        let cells = Lattice { cell: 100_000.0 }.cells((1280, 720));
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].centre(), (640.0, 360.0));
+    }
+
+    #[test]
+    fn the_cells_tile_the_output() {
+        let cells = Lattice { cell: 110.0 }.cells((1280, 720));
+        let (columns, rows) = (11, 6);
+        assert_eq!(cells.len(), columns * rows);
+        for row in 0..rows {
+            for column in 0..columns {
+                let cell = cells[row * columns + column];
+                assert_eq!(cell.x, column as f64 * cell.w);
+                assert_eq!(cell.y, row as f64 * cell.h);
+            }
+        }
+        // No gaps and no overlap: the last cell's far edge is the output's.
+        let last = cells[cells.len() - 1];
+        assert!((cells[columns - 1].x + cells[columns - 1].w - 1280.0).abs() < 1e-9);
+        assert!((last.y + last.h - 720.0).abs() < 1e-9);
     }
 }

@@ -91,6 +91,12 @@ impl Theme {
         self.text_matched
     }
 
+    /// A hint cell's fill. Quiet enough that what the cell covers stays the
+    /// thing being read, which is the whole point of hint mode.
+    pub fn hint_cell(&self) -> Rgba {
+        self.panel.with_alpha(0x28)
+    }
+
     /// Everything tinted deriv[ies] from [`Theme::accent`] rather than naming a
     /// colour of its own, so a single configuration line moves the whole
     /// interface together.
@@ -135,5 +141,14 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(theme.grid_line().a < theme.accent.a, true);
         assert_eq!(theme.matched().a < theme.text.a, true);
+    }
+
+    #[test]
+    fn a_hint_cell_is_quieter_than_a_badge() {
+        // The cell covers a whole region, so it has to be far more transparent
+        // than the panel a label sits in.
+        let theme = Theme::default();
+        assert!(theme.hint_cell().a < theme.surface().a / 2);
+        assert_eq!(theme.hint_cell().a > 0, true, "a cell has to be visible");
     }
 }
