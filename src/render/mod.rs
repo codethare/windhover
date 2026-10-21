@@ -8,6 +8,12 @@ pub mod canvas;
 pub mod text;
 pub mod theme;
 
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use tiny_skia::Pixmap;
+
 use crate::mode::grid::Grid;
 
 pub use canvas::Canvas;
@@ -23,6 +29,8 @@ pub struct Frame<'a> {
     pub dragging: bool,
     /// The speed preset the session is moving at. `1.0` is unlabelled.
     pub speed: f64,
+    /// The label type size for this output, in logical pixels.
+    pub label_size: f32,
     pub grid: Option<GridFrame<'a>>,
     pub hint: Option<HintFrame<'a>>,
 }
@@ -35,6 +43,8 @@ pub struct GridFrame<'a> {
 
 pub struct HintFrame<'a> {
     pub hint: &'a crate::mode::hint::Hint,
+    /// The cell boundaries, as x and y positions, for the grid the labels sit on.
+    pub lines: &'a (Vec<f64>, Vec<f64>),
 }
 
 impl<'a> Frame<'a> {
@@ -45,22 +55,29 @@ impl<'a> Frame<'a> {
             multiplier: None,
             dragging: false,
             speed: 1.0,
+            label_size: 14.0,
             grid: None,
             hint: None,
         }
     }
 }
 
-pub fn draw(canvas: &mut Canvas, theme: &Theme, fonts: &mut Option<Fonts>, frame: &Frame<'_>) {
+pub fn draw(
+    canvas: &mut Canvas,
+    theme: &Theme,
+    fonts: &mut Option<Fonts>,
+    badges: &mut Badges,
+    frame: &Frame<'_>,
+) {
     // An overlay that dims the screen would defeat hint mode's purpose: the
     // user has to be able to read what is underneath.
     canvas.clear(Rgba::rgba(0, 0, 0, 0));
 
     if let Some(grid) = &frame.grid {
-        draw_grid(canvas, theme, fonts, frame.scale, grid);
+        draw_grid(canvas, theme, fonts, badges, frame.scale, frame.label_size, grid);
     }
     if let Some(hint) = &frame.hint {
-        draw_hint(canvas, theme, fonts, frame.scale, hint);
+        draw_hint(canvas, theme, fonts, badges, frame.scale, frame.label_size, hint);
     }
 
     draw_cursor(canvas, theme, frame.scale, frame.cursor);
@@ -71,7 +88,9 @@ fn draw_grid(
     canvas: &mut Canvas,
     theme: &Theme,
     fonts: &mut Option<Fonts>,
+    badges: &mut Badges,
     scale: f32,
+    size: f32,
     view: &GridFrame<'_>,
 ) {
     let region = view.grid.region();
@@ -111,7 +130,7 @@ fn draw_grid(
             break;
         };
         let (x, y) = cell.center();
-        badge(canvas, theme, fonts, (x as f32, y as f32), label, 0, scale);
+        badge(canvas, theme, fonts, badges, (x as f32, y as f32), label, 0, scale, size);
     }
 }
 
@@ -119,30 +138,49 @@ fn draw_hint(
     canvas: &mut Canvas,
     theme: &Theme,
     fonts: &mut Option<Fonts>,
+    badges: &mut Badges,
     scale: f32,
+    size: f32,
     view: &HintFrame<'_>,
 ) {
+    // The lattice is a map of regions, and a map of regions is lines: filling
+    // every cell costs as much as filling the screen, which at 4K was most of a
+    // frame. A cell is only painted once the user has narrowed the labels, when
+    // the few survivors are what is left to look at.
+    if view.hint.filtering() {
+        for (target, _) in view.hint.visible() {
+            let cell = target.cell;
+            canvas.rounded_rect(
+                cell.x as f32 * scale,
+                cell.y as f32 * scale,
+                cell.w as f32 * scale,
+                cell.h as f32 * scale,
+                theme.badge_radius * scale,
+                theme.hint_cell(),
+            );
+        }
+    }
+
+    let width = canvas.width() as f32;
+    let height = canvas.height() as f32;
+    let _ = (width, height);
+    for x in &view.lines.0 {
+        canvas.vline(*x as f32 * scale, theme.hairline * scale, theme.hint_line());
+    }
+    for y in &view.lines.1 {
+        canvas.hline(*y as f32 * scale, theme.hairline * scale, theme.hint_line());
+    }
+
     for (target, matched) in view.hint.visible() {
         let cell = target.cell;
-        // The cell is what makes a target a region rather than a point; it is
-        // translucent, so the thing being aimed at stays visible through it.
-        canvas.panel_with_edge(
-            cell.x as f32 * scale,
-            cell.y as f32 * scale,
-            cell.w as f32 * scale,
-            cell.h as f32 * scale,
-            theme.badge_radius * scale,
-            theme.hint_cell(),
-            theme.panel_edge,
-            theme.hairline * scale,
-        );
-        // The label keeps a panel of its own: white text on a translucent fill is
-        // unreadable over a light background, and the fill cannot be opaque
-        // without hiding the target.
+        // The label keeps a panel of its own: white text over a line grid is
+        // unreadable on a light background, and a fill opaque enough to carry it
+        // would hide the thing being aimed at.
         badge(
             canvas,
             theme,
             fonts,
+            badges,
             (
                 (cell.x + cell.w / 2.0) as f32,
                 (cell.y + cell.h / 2.0) as f32,
@@ -150,66 +188,169 @@ fn draw_hint(
             &target.label,
             matched,
             scale,
+            size,
         );
     }
 }
 
-/// A label in a translucent rounded panel. Used by both grid and hint mode so
-/// the two cannot drift apart.
-fn badge(
-    canvas: &mut Canvas,
+/// One label's panel and text, rasterized once.
+struct Cached {
+    pixmap: Pixmap,
+    /// Where the panel's top left sits relative to the point it was centred on.
+    offset: (f32, f32),
+}
+
+/// Labels already rasterized for this theme and scale.
+///
+/// A hint frame draws the same few hundred labels again on every keystroke, and
+/// what that cost was the rasterizer's per-path work — two glyphs and a filled,
+/// stroked box each — not the area they cover, so it did not improve when the
+/// area did. Keyed on the label and how much of it is typed, cleared whenever
+/// the values a badge is drawn from change.
+#[derive(Default)]
+pub struct Badges {
+    key: Option<u64>,
+    labels: HashMap<(String, usize), Cached>,
+}
+
+impl Badges {
+    /// The label's raster, drawn into the cache if this is its first appearance.
+    fn get(
+        &mut self,
+        theme: &Theme,
+        fonts: &mut Fonts,
+        label: &str,
+        matched: usize,
+        scale: f32,
+        size: f32,
+    ) -> &Cached {
+        let key = fingerprint(theme, scale, size);
+        if self.key != Some(key) {
+            self.labels.clear();
+            self.key = Some(key);
+        }
+        let entry = (label.to_string(), matched);
+        if !self.labels.contains_key(&entry) {
+            let cached = rasterize(theme, fonts, label, matched, scale, size);
+            self.labels.insert(entry.clone(), cached);
+        }
+        &self.labels[&entry]
+    }
+
+    #[cfg(test)]
+    fn cached(&self) -> usize {
+        self.labels.len()
+    }
+}
+
+fn fingerprint(theme: &Theme, scale: f32, size: f32) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for colour in [
+        theme.text,
+        theme.text_matched,
+        theme.panel,
+        theme.panel_edge,
+    ] {
+        (colour.r, colour.g, colour.b, colour.a).hash(&mut hasher);
+    }
+    for value in [
+        size,
+        theme.badge_padding_x,
+        theme.badge_padding_y,
+        theme.badge_radius,
+        theme.hairline,
+        scale,
+    ] {
+        value.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Draw a label into a pixmap of its own, centred on nothing yet: the offset the
+/// frame places it by comes back with it.
+fn rasterize(
     theme: &Theme,
-    fonts: &mut Option<Fonts>,
-    centre: (f32, f32),
+    fonts: &mut Fonts,
     label: &str,
     matched: usize,
     scale: f32,
-) {
-    let Some(fonts) = fonts.as_mut() else {
-        return;
-    };
-    let size = theme.badge_font_size;
+    size: f32,
+) -> Cached {
     let text_width = fonts.measure(label, size);
     let (ascent, descent) = fonts.ascent_descent(size);
     let padding = (theme.badge_padding_x, theme.badge_padding_y);
     let width = (text_width + padding.0 * 2.0) * scale;
     let height = (ascent + descent + padding.1 * 2.0) * scale;
-    let x = centre.0 * scale - width / 2.0;
-    let y = centre.1 * scale - height / 2.0;
-
-    // No drop shadow on a badge: `soft_shadow` is concentric rectangles, and on a
-    // box this small the rings read as an artifact rather than as depth. The
-    // panel fill and the hairline are what separate it from the screen, which is
-    // also what makes a small pill legible on any background.
-    canvas.panel_with_edge(
-        x,
-        y,
-        width,
-        height,
-        theme.badge_radius * scale,
-        theme.surface(),
-        theme.panel_edge,
-        theme.hairline * scale,
+    let (w, h) = (
+        (width.ceil() as u32).max(1),
+        (height.ceil() as u32).max(1),
     );
-
-    let baseline = y + (padding.1 + ascent) * scale;
-    let text_left = x + padding.0 * scale;
-    let matched_chars = label.chars().count().min(matched);
-    if matched_chars > 0 {
-        let prefix: String = label.chars().take(matched_chars).collect();
-        let prefix_width = fonts.measure(&prefix, size) * scale;
-        fonts.draw(canvas, &prefix, text_left, baseline, size * scale, theme.matched());
-        fonts.draw(
-            canvas,
-            &label.chars().skip(matched_chars).collect::<String>(),
-            text_left + prefix_width,
-            baseline,
-            size * scale,
-            theme.text,
+    let mut pixmap = Pixmap::new(w, h).expect("a label box is never empty");
+    {
+        let mut canvas = Canvas::new(pixmap.data_mut(), w, h).expect("the box fits its own pixmap");
+        canvas.panel_with_edge(
+            0.0,
+            0.0,
+            width,
+            height,
+            theme.badge_radius * scale,
+            theme.surface(),
+            theme.panel_edge,
+            theme.hairline * scale,
         );
-    } else {
-        fonts.draw(canvas, label, text_left, baseline, size * scale, theme.text);
+
+        let baseline = padding.1 * scale + ascent * scale;
+        let text_left = padding.0 * scale;
+        let matched_chars = label.chars().count().min(matched);
+        if matched_chars > 0 {
+            let prefix: String = label.chars().take(matched_chars).collect();
+            let prefix_width = fonts.measure(&prefix, size) * scale;
+            fonts.draw(
+                &mut canvas,
+                &prefix,
+                text_left,
+                baseline,
+                size * scale,
+                theme.matched(),
+            );
+            fonts.draw(
+                &mut canvas,
+                &label.chars().skip(matched_chars).collect::<String>(),
+                text_left + prefix_width,
+                baseline,
+                size * scale,
+                theme.text,
+            );
+        } else {
+            fonts.draw(&mut canvas, label, text_left, baseline, size * scale, theme.text);
+        }
     }
+    Cached {
+        pixmap,
+        offset: (-width / 2.0, -height / 2.0),
+    }
+}
+
+/// A label in a translucent rounded panel, from the cache when it has been drawn
+/// before. Used by both grid and hint mode so the two cannot drift apart.
+fn badge(
+    canvas: &mut Canvas,
+    theme: &Theme,
+    fonts: &mut Option<Fonts>,
+    badges: &mut Badges,
+    centre: (f32, f32),
+    label: &str,
+    matched: usize,
+    scale: f32,
+    size: f32,
+) {
+    let Some(fonts) = fonts.as_mut() else {
+        return;
+    };
+    let cached = badges.get(theme, fonts, label, matched, scale, size);
+    let x = (centre.0 * scale + cached.offset.0).round() as i32;
+    let y = (centre.1 * scale + cached.offset.1).round() as i32;
+    canvas.blit(x, y, &cached.pixmap);
 }
 
 /// A ring around the cursor. Normal mode has to show where the pointer is
@@ -372,7 +513,7 @@ mod tests {
             grid: &grid,
             cell_labels: &labels,
         });
-        draw(&mut canvas, &theme, &mut fonts, &frame);
+        draw(&mut canvas, &theme, &mut fonts, &mut Badges::default(), &frame);
 
         // The region edge, the interior lines, and a badge at a cell centre.
         // Thresholds rather than exact values: everything is antialiased.
@@ -383,47 +524,94 @@ mod tests {
         assert_eq!(alpha_at(&bytes, 1280, 100, 100), 0, "the region was filled");
     }
 
+    fn hint_frame<'a>(
+        hint: &'a Hint,
+        lines: &'a (Vec<f64>, Vec<f64>),
+    ) -> Frame<'a> {
+        let mut frame = Frame::normal(1.0, (0.0, 0.0));
+        frame.hint = Some(HintFrame { hint, lines });
+        frame
+    }
+
     #[test]
-    fn a_hint_frame_draws_a_translucent_cell_per_target() {
-        let mut bytes = buffer(640, 360);
-        let mut canvas = Canvas::new(&mut bytes, 640, 360).unwrap();
+    fn a_hint_frame_draws_the_lattice_as_lines() {
+        let mut bytes = buffer(640, 400);
+        let mut canvas = Canvas::new(&mut bytes, 640, 400).unwrap();
         let theme = Theme::default();
         let (mut fonts, _) = Fonts::load("sans-serif");
-        let cells = vec![
-            Cell {
-                x: 40.0,
-                y: 40.0,
-                w: 120.0,
-                h: 120.0,
-            },
-            Cell {
-                x: 340.0,
-                y: 140.0,
-                w: 120.0,
-                h: 120.0,
-            },
-        ];
+        let lattice = crate::hint::lattice::Lattice::new(200.0);
+        let cells = lattice.cells((640, 400));
+        let lines = lattice.lines((640, 400));
         let hint = Hint::new(cells, &"as".chars().collect::<Vec<_>>());
-        let mut frame = Frame::normal(1.0, (0.0, 0.0));
-        frame.hint = Some(HintFrame { hint: &hint });
-        draw(&mut canvas, &theme, &mut fonts, &frame);
+        draw(
+            &mut canvas,
+            &theme,
+            &mut fonts,
+            &mut Badges::default(),
+            &hint_frame(&hint, &lines),
+        );
 
-        // The interior of each cell is its fill: translucent, so what is under it
-        // stays readable, and present, so the cell reads as a target region.
-        let fill = alpha_at(&bytes, 640, 45, 45);
-        assert_eq!(fill, theme.hint_cell().a, "cell 0 was not filled");
-        assert!(fill < 0x80, "the fill is not translucent: {fill}");
-        assert_eq!(alpha_at(&bytes, 640, 345, 145), fill, "cell 1 was not filled");
-        // Its edge is the hairline, which is stronger than the fill.
-        assert!(alpha_at(&bytes, 640, 40, 100) > fill, "cell 0 has no edge");
-        // And nothing is drawn between the cells.
-        assert_eq!(alpha_at(&bytes, 640, 250, 40), 0, "something was drawn outside");
-        // The label sits inside the cell, not on top of its edge.
-        let label_pixels = (60..140)
+        // The lattice is a map of regions, so it is lines, not filled cells.
+        assert!(alpha_at(&bytes, 640, 213, 30) > 0, "no cell boundary");
+        assert_eq!(
+            alpha_at(&bytes, 640, 20, 20),
+            0,
+            "an unfiltered cell was filled"
+        );
+        // And every label is drawn, in its panel.
+        let label = (80..140)
             .map(|x| alpha_at(&bytes, 640, x, 100))
             .max()
             .unwrap_or(0);
-        assert!(label_pixels > fill, "no label in cell 0");
+        assert!(label > 200, "no label in the first cell");
+    }
+
+    #[test]
+    fn only_the_surviving_cells_are_filled_once_a_label_is_typed() {
+        let mut bytes = buffer(640, 400);
+        let mut canvas = Canvas::new(&mut bytes, 640, 400).unwrap();
+        let theme = Theme::default();
+        let (mut fonts, _) = Fonts::load("sans-serif");
+        let lattice = crate::hint::lattice::Lattice::new(200.0);
+        let lines = lattice.lines((640, 400));
+        let mut hint = Hint::new(lattice.cells((640, 400)), &"as".chars().collect::<Vec<_>>());
+        // Six cells over a two-letter alphabet are labelled in three characters,
+        // so one typed letter narrows without completing a label.
+        assert!(hint.on_char('a', false).is_empty());
+        draw(
+            &mut canvas,
+            &theme,
+            &mut fonts,
+            &mut Badges::default(),
+            &hint_frame(&hint, &lines),
+        );
+
+        let fill = alpha_at(&bytes, 640, 20, 20);
+        assert_eq!(fill, theme.hint_cell().a, "a surviving cell was not filled");
+        assert!(fill < 0x80, "the fill is not translucent: {fill}");
+        // A cell whose label does not start with `a` is still a boundary in the
+        // lattice, and no longer a filled region.
+        let gone = alpha_at(&bytes, 640, 620, 380);
+        assert_eq!(gone, 0, "a filtered-out cell was filled");
+    }
+
+    #[test]
+    fn a_label_is_rasterized_once_per_frame_and_reused() {
+        let mut bytes = buffer(640, 400);
+        let mut canvas = Canvas::new(&mut bytes, 640, 400).unwrap();
+        let theme = Theme::default();
+        let (mut fonts, _) = Fonts::load("sans-serif");
+        let lattice = crate::hint::lattice::Lattice::new(200.0);
+        let lines = lattice.lines((640, 400));
+        let hint = Hint::new(lattice.cells((640, 400)), &"as".chars().collect::<Vec<_>>());
+        let mut badges = Badges::default();
+
+        draw(&mut canvas, &theme, &mut fonts, &mut badges, &hint_frame(&hint, &lines));
+        let first = badges.cached();
+        assert!(first > 0, "no labels were cached");
+        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        draw(&mut canvas, &theme, &mut fonts, &mut badges, &hint_frame(&hint, &lines));
+        assert_eq!(badges.cached(), first, "the second frame rasterized again");
     }
 
     #[test]
@@ -438,7 +626,7 @@ mod tests {
             let (mut fonts, _) = Fonts::load("sans-serif");
             let mut frame = Frame::normal(1.0, (50.0, 50.0));
             frame.speed = speed;
-            draw(&mut canvas, &theme, &mut fonts, &frame);
+            draw(&mut canvas, &theme, &mut fonts, &mut Badges::default(), &frame);
             // The status sits down and to the right of the cursor ring, which
             // never reaches past (60, 60).
             (60..200)

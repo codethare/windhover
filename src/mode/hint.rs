@@ -52,6 +52,12 @@ impl Hint {
             .collect()
     }
 
+    /// Whether the user has narrowed the labels, which is what turns the grid
+    /// from a map of regions into a set of surviving cells.
+    pub fn filtering(&self) -> bool {
+        !self.typed.is_empty()
+    }
+
     pub fn on_char(&mut self, ch: char, click_after_warp: bool) -> Vec<Effect> {
         self.typed.push(ch);
         let matching: Vec<&Target> = self

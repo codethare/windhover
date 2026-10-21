@@ -12,7 +12,7 @@ Three modes, one binary, no daemon:
 |---|---|
 | **normal** | `h` `j` `k` `l` move (hold to accelerate, `Ctrl` for double) · digits are a multiplier · `H` `M` `L` jump to left / middle / right edge · `[` `\` `]` speed presets · `m` `,` `.` left / middle / right click · `v` drag · `g` grid · `f` hint · `Esc` quit |
 | **grid** | `q` `w` `a` `s` pick a quadrant · repeat to shrink · `h` `j` `k` `l` pan the region · `BackSpace` undo · `Return` warp · `Space` warp and click · `Esc` quit |
-| **hint** | a translucent grid of cells, two characters per label · type a label · `BackSpace` edit (or return to normal when empty) · `Esc` quit |
+| **hint** | a grid of cells, one or two characters per label · type a label · `BackSpace` edit (or return to normal when empty) · `Esc` quit |
 
 Grid and hint hand off to normal mode for fine adjustment, so a session is one
 continuous interaction rather than three separate tools.

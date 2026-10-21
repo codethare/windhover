@@ -486,9 +486,9 @@ mod tests {
                 "{screen:?} gave {} cells",
                 columns * rows
             );
-            assert_eq!(
-                crate::hint::labels::length(columns * rows, &config.hint_charset),
-                2,
+            let labels = crate::hint::labels::assign(columns * rows, &config.hint_charset);
+            assert!(
+                labels.iter().all(|label| label.chars().count() <= 2),
                 "{screen:?} needed more than two characters"
             );
         }

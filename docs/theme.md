@@ -67,8 +67,9 @@ a change to the primitives breaks the build rather than the documentation.
 `theme.rs` pins the colour conversion, and `text.rs` pins font resolution,
 measurement monotonicity and the fallback when the requested family is missing.
 `render/mod.rs` checks that a grid frame draws its edge, its interior lines and
-its badges and leaves everything else transparent, and that a hint frame fills a
-translucent cell with its label in it.
+its badges and leaves everything else transparent, and that a hint frame draws
+its lattice as lines, fills only the cells left after a typed character, and
+rasterizes each label once.
 `scripts/capture.sh` renders one frame per mode against a headless compositor
 and writes PNGs to look at, which is how the channel-order and unstyled-accent
 bugs were found.

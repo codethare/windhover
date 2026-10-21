@@ -16,6 +16,12 @@ fn to_canvas(colour: Rgba) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(colour.b, colour.g, colour.r, colour.a)
 }
 
+#[derive(Clone, Copy)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
 pub struct Canvas<'a> {
     bytes: &'a mut [u8],
     width: u32,
@@ -47,10 +53,116 @@ impl<'a> Canvas<'a> {
             .expect("canvas size was checked on construction")
     }
 
+    /// Copy a rasterized fragment, premultiplied like everything else here, so
+    /// blending and the byte order stay the caller's problem only once.
+    ///
+    /// `Pixmap::draw_pixmap` fills the destination rectangle with a pattern,
+    /// which measured at about 100 ns a pixel — 40 ms a frame for the labels
+    /// alone. This is the same source-over composite over the clipped overlap,
+    /// at a few nanoseconds a pixel.
+    pub fn blit(&mut self, x: i32, y: i32, source: &tiny_skia::Pixmap) {
+        let (width, height) = (self.width as i32, self.height as i32);
+        let (source_width, source_height) = (source.width() as i32, source.height() as i32);
+        let (left, top) = (x.max(0), y.max(0));
+        let (right, bottom) = ((x + source_width).min(width), (y + source_height).min(height));
+        if right <= left || bottom <= top {
+            return;
+        }
+        let source = source.data();
+        for row in top..bottom {
+            let source_start = ((row - y) as usize * source_width as usize + (left - x) as usize) * 4;
+            let source_row = &source[source_start..];
+            let destination_start = (row as usize * self.width as usize + left as usize) * 4;
+            let destination =
+                &mut self.bytes[destination_start..destination_start + (right - left) as usize * 4];
+            for (pixel, source_pixel) in destination
+                .chunks_exact_mut(4)
+                .zip(source_row.chunks_exact(4))
+            {
+                let alpha = source_pixel[3] as u32;
+                match alpha {
+                    255 => pixel.copy_from_slice(source_pixel),
+                    0 => {}
+                    _ => {
+                        let inverse = 255 - alpha;
+                        for channel in 0..4 {
+                            pixel[channel] = (source_pixel[channel] as u32
+                                + pixel[channel] as u32 * inverse / 255)
+                                as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn clear(&mut self, colour: Rgba) {
+        if colour.a == 0 {
+            // A fully transparent premultiplied pixel is all zeroes, and a fill
+            // is a memset instead of a pixel loop: 47 ms saved at 4K on the
+            // scale-2 buffer, which is a whole frame's budget.
+            self.bytes.fill(0);
+            return;
+        }
         let (r, g, b, a) = premultiply(colour);
         for pixel in self.bytes.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[r, g, b, a]);
+        }
+    }
+
+    /// An axis-aligned run, `thickness` device pixels across, centred on `at`.
+    ///
+    /// Stroking a path for these costs about 30 ns per pixel of length, which is
+    /// most of a frame for a full-screen lattice; a run needs one composite per
+    /// covered pixel and nothing else.
+    pub fn hline(&mut self, at: f32, thickness: f32, colour: Rgba) {
+        self.run(at, thickness, colour, Axis::Horizontal);
+    }
+
+    pub fn vline(&mut self, at: f32, thickness: f32, colour: Rgba) {
+        self.run(at, thickness, colour, Axis::Vertical);
+    }
+
+    fn run(&mut self, at: f32, thickness: f32, colour: Rgba, axis: Axis) {
+        // Buffer order, premultiplied: the same tuple `clear` writes.
+        let (blue, green, red, alpha) = premultiply(colour);
+        if alpha == 0 || thickness <= 0.0 {
+            return;
+        }
+        let (from, to) = (at - thickness / 2.0, at + thickness / 2.0);
+        let (width, height) = (self.width as i32, self.height as i32);
+        let source = [blue, green, red, 0];
+        let (span, stride) = match axis {
+            Axis::Vertical => (height as usize, width as usize),
+            Axis::Horizontal => (width as usize, 1usize),
+        };
+        for pixel in (from.floor() as i32)..(to.ceil() as i32) {
+            let coverage = (to.min(pixel as f32 + 1.0) - from.max(pixel as f32)).clamp(0.0, 1.0);
+            if coverage <= 0.0 || pixel < 0 {
+                continue;
+            }
+            let base = match axis {
+                Axis::Vertical if pixel < width => pixel as usize,
+                Axis::Horizontal if pixel < height => pixel as usize * width as usize,
+                _ => continue,
+            };
+            let alpha = (alpha as f32 * coverage).round() as u32;
+            if alpha == 0 {
+                continue;
+            }
+            let inverse = 255 - alpha;
+            for step in 0..span {
+                let index = (base + step * stride) * 4;
+                for channel in 0..3 {
+                    let existing = self.bytes[index + channel] as u32;
+                    self.bytes[index + channel] =
+                        (source[channel] as u32 * alpha / 255 + existing * inverse / 255) as u8;
+                }
+                // Alpha composites like any other channel: premultiplied with a
+                // zero alpha would be a line nothing can see.
+                let existing = self.bytes[index + 3] as u32;
+                self.bytes[index + 3] = (alpha + existing * inverse / 255) as u8;
+            }
         }
     }
 
@@ -232,6 +344,74 @@ mod tests {
         let mut canvas = Canvas::new(&mut bytes, 1, 1).unwrap();
         canvas.clear(Rgba::rgb(0x0A, 0x84, 0xFF));
         assert_eq!(pixel(&bytes, 1, 0, 0), [0xFF, 0x84, 0x0A, 0xFF]);
+    }
+
+    #[test]
+    fn a_blit_copies_the_fragment_where_it_was_asked_and_blends_its_alpha() {
+        // The fragment is drawn on nothing, so its second pixel is genuinely
+        // half transparent and has to blend with what the frame already has.
+        let mut source = tiny_skia::Pixmap::new(2, 2).unwrap();
+        {
+            let mut fragment = Canvas::new(source.data_mut(), 2, 2).unwrap();
+            fragment.rounded_rect(0.0, 0.0, 1.0, 1.0, 0.0, Rgba::rgba(0x0A, 0x84, 0xFF, 0xFF));
+            fragment.rounded_rect(1.0, 1.0, 1.0, 1.0, 0.0, Rgba::rgba(0xFF, 0x00, 0x00, 0x80));
+        }
+
+        let mut bytes = canvas_bytes(4, 4);
+        {
+            let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
+            canvas.clear(Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+            canvas.blit(2, 1, &source);
+        }
+
+        // Opaque fragment pixel, in the buffer's byte order.
+        assert_eq!(pixel(&bytes, 4, 2, 1), [0xFF, 0x84, 0x0A, 0xFF]);
+        // Half-transparent red over white: half of each channel, and the alpha
+        // of the frame stays opaque.
+        assert_eq!(pixel(&bytes, 4, 3, 2), [0x7F, 0x7F, 0xFF, 0xFF]);
+        // The fragment's transparent pixel left the frame alone, and so did the
+        // pixels outside it.
+        assert_eq!(pixel(&bytes, 4, 2, 2), [0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(pixel(&bytes, 4, 1, 1), [0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn a_run_splits_its_coverage_between_the_pixels_it_overlaps() {
+        // A one-pixel run centred on 2.0 spans 1.5..2.5, so it is half in column
+        // 1 and half in column 2, and nothing anywhere else. Getting this wrong
+        // is silent: the line still draws, just not where it was asked to.
+        let mut bytes = canvas_bytes(4, 4);
+        {
+            let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
+            canvas.vline(2.0, 1.0, Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+        }
+        assert_eq!(pixel(&bytes, 4, 0, 0)[3], 0);
+        assert_eq!(pixel(&bytes, 4, 1, 0)[3], 0x80);
+        assert_eq!(pixel(&bytes, 4, 2, 0)[3], 0x80);
+        assert_eq!(pixel(&bytes, 4, 3, 0)[3], 0);
+        // The run spans the whole column, not just its first pixel.
+        assert_eq!(pixel(&bytes, 4, 1, 3)[3], 0x80);
+
+        let mut bytes = canvas_bytes(4, 4);
+        {
+            let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
+            canvas.hline(0.0, 1.0, Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+        }
+        assert_eq!(pixel(&bytes, 4, 0, 0)[3], 0x80);
+        assert_eq!(pixel(&bytes, 4, 0, 1)[3], 0);
+        assert_eq!(pixel(&bytes, 4, 3, 0)[3], 0x80);
+    }
+
+    #[test]
+    fn a_run_leaves_the_colour_order_and_the_outside_alone() {
+        let mut bytes = canvas_bytes(4, 4);
+        {
+            let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
+            canvas.vline(0.5, 1.0, Rgba::rgba(0x0A, 0x84, 0xFF, 0xFF));
+        }
+        // Opaque blue, in the byte order the compositor reads.
+        assert_eq!(pixel(&bytes, 4, 0, 2), [0xFF, 0x84, 0x0A, 0xFF]);
+        assert_eq!(pixel(&bytes, 4, 1, 2), [0, 0, 0, 0]);
     }
 
     #[test]

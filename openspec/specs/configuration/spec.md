@@ -92,10 +92,11 @@ size, about 10 logical pixels), the three edge-jump keys (`H` `M` `L`), the thre
 mouse-button keys (`m` `,` `.`), the drag toggle (`v`), the keys that enter grid
 and hint mode (`g` `f`), the grid partition (`2x2`), the grid cell key table, the
 grid minimum size, the grid undo key (`BackSpace`), the grid warp key (`Return`),
-the grid warp-and-click key (`Space`), the hint lattice spacing, the hint label
-alphabet, whether to click after a warp (no), the hint editing key (`BackSpace`),
-the two scroll keys (`u` up, `d` down), the font family, and the colours used by
-grid and hint mode.
+the grid warp-and-click key (`Space`), the hint lattice spacing (derived so the
+labels are two characters long), the hint label alphabet (twenty characters,
+letters and `;`), whether to click after a warp (no), the hint editing key
+(`BackSpace`), the two scroll keys (`u` up, `d` down), the font family, and the
+colours used by grid and hint mode.
 
 #### Scenario: Changing the movement step
 
@@ -105,7 +106,14 @@ grid and hint mode.
 #### Scenario: Changing the hint density
 
 - **WHEN** the configuration sets the hint lattice spacing to a smaller value
-- **THEN** more targets are generated, and the labels stay prefix-free
+- **THEN** more targets are generated, and the labels stay prefix-free, growing
+  to three characters only when the two-character budget is exceeded
+
+#### Scenario: A label alphabet containing punctuation
+
+- **WHEN** the configuration gives a hint label alphabet containing a printable
+  non-whitespace character that is not a letter or a digit, such as `;`
+- **THEN** that character is accepted and used in labels
 
 #### Scenario: Changing the colours
 
@@ -138,3 +146,25 @@ read, for instance).
 - **WHEN** the configuration file contains several ignored lines
 - **THEN** the session still runs as an interactive session, and exits with status
   0
+
+### Requirement: Speed preset bindings
+
+The three speed presets SHALL be key options, with the fine preset bound to `[`,
+the normal preset to `\` and the coarse preset to `]` by default. Binding,
+unbinding and rebinding them SHALL follow the same rules as the other key
+options.
+
+#### Scenario: Rebinding a preset
+
+- **WHEN** the configuration binds the fine preset to another key
+- **THEN** that key selects the fine preset and `[` no longer does
+
+#### Scenario: Unbinding a preset
+
+- **WHEN** the configuration gives `unbind` as a preset's value
+- **THEN** no key selects that preset, and the session keeps running
+
+#### Scenario: The defaults are reachable
+
+- **WHEN** the session starts with no configuration
+- **THEN** `[`, `\` and `]` select the fine, normal and coarse presets

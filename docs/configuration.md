@@ -130,7 +130,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `grid_columns` `grid_rows` | `2` `2` | Partition of the grid region |
 | `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise |
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |
-| `hint_cell` | derived so the output is filled with `len(hint_charset)²` cells | Wanted spacing between hint cells, in logical pixels. The default keeps every label at two characters; a smaller value raises them to three, and a value that would need more is refused at start |
+| `hint_cell` | derived so the output is filled with `len(hint_charset)²` cells | Wanted spacing between hint cells, in logical pixels. No axis ever gets more cells than the alphabet has characters, so a label is one character where there is spare room in the two-character budget and two everywhere else |
 | `hint_charset` | `asdfjkl;ghqwertyuiop` | Label alphabet, printable ASCII. Labels are all the same length, so the length grows rather than letting one label prefix another |
 | `click_after_warp` | `false` | Click when a hint is selected |
 | `font_family` | `sans-serif` | Resolved through `fc-match`, with a built-in path list as a fallback |

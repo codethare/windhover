@@ -325,7 +325,8 @@ cursor_check() {
   WANT_Y_EXPR=$5
   EXTRA=${6:-}
 
-  session_start "$FLAG"
+  # shellcheck disable=SC2086
+  session_start "$FLAG" ${SESSION_ARGS:-}
   if ! session_alive; then
     fail "$NAME: session did not start: $(cat "$RUNTIME/session.out")"
     return
@@ -392,17 +393,19 @@ cursor_check "grid: warp to the region centre" --grid "tap:w tap:Return" "W*3/4"
 # `space` warps, clicks through the suspended overlay and returns to normal
 # mode; the position proves the batch survived taking the overlay down.
 cursor_check "grid: warp and click through" --grid "tap:w tap:space" "W*3/4" "H/4"
-# The default lattice fills the output with as many cells as the alphabet can
-# name in two characters, so the spacing is `sqrt(W*H/400)` and the first label
-# (`aa`) sits at the centre of the first cell.
-cursor_check "hint: the first label" --hint "tap:a tap:a" \
-  "(W/(int(W/sqrt(W*H/400))>0?int(W/sqrt(W*H/400)):1))*0.5" \
-  "(H/(int(H/sqrt(W*H/400))>0?int(H/sqrt(W*H/400)):1))*0.5"
+# The lattice is capped per axis at the alphabet size, so a two-character
+# alphabet over a 100-pixel lattice is a 2x2 grid whatever the output: four
+# cells, four labels in row major order, and `aa` is the first. Both the cap and
+# the pinned spacing are what make this check independent of the screen.
+printf 'hint_charset: as\nhint_cell: 100\n' >"$RUNTIME/two-letter-alphabet"
+SESSION_ARGS="--config $RUNTIME/two-letter-alphabet"
+cursor_check "hint: the first label" --hint "tap:a tap:a" "W/4" "H/4"
 # `H` is bound in normal mode only, so the cursor landing on the left edge is
 # what proves the selection handed over to normal mode instead of staying in the
 # mode it was made in. The same key proves it for a grid warp.
 cursor_check "hint: a selected label lands in normal mode" --hint \
   "tap:a tap:a mods:shift tap:h mods:" 0 -
+SESSION_ARGS=
 cursor_check "grid: a warp lands in normal mode" --grid \
   "tap:w tap:Return mods:shift tap:h mods:" 0 -
 
@@ -706,23 +709,6 @@ oneshot_check() {
 }
 oneshot_check "a one-shot hint session ends itself" "tap:a tap:a"
 oneshot_check "and the next one leaves nothing behind" "tap:a tap:s"
-
-echo "check: a hint lattice too dense to label is refused"
-# Twenty characters name 8000 cells in three characters; ten-pixel cells on this
-# output are 9216. A session that dropped targets or repeated labels instead
-# would look like it worked, so the refusal is what is being checked, not the
-# exit status on its own.
-printf 'hint_cell: 10\n' >"$RUNTIME/dense-hint"
-DENSE_STATUS=0
-timeout 5 "$WINDHOVER" --config "$RUNTIME/dense-hint" --hint >"$RUNTIME/dense-hint.out" 2>&1 || DENSE_STATUS=$?
-if [ "$DENSE_STATUS" = "124" ]; then
-  fail "a lattice needing four characters started a session and kept running"
-  pkill -f "$RUNTIME/dense-hint" 2>/dev/null || true
-elif grep -q "hint_cell" "$RUNTIME/dense-hint.out"; then
-  pass "a lattice too dense to label is refused — $(head -1 "$RUNTIME/dense-hint.out")"
-else
-  fail "the refusal does not name the option: $(cat "$RUNTIME/dense-hint.out")"
-fi
 
 echo "check: a mode that never hands over is refused"
 if "$WINDHOVER" --normal --oneshot >"$RUNTIME/oneshot-bad.out" 2>&1; then

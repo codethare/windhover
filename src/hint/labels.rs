@@ -1,32 +1,58 @@
 //! Prefix-free label assignment over the configured character set.
 
-/// The most characters a label may carry. Three name 8000 cells with the default
-/// alphabet, past any output at a legible cell size, so this guards against a
-/// nonsensical configuration rather than limiting anyone. The session refuses a
-/// configuration that would need more; [`assign`] itself has no ceiling.
-pub const MAX_LENGTH: usize = 3;
-
-/// The shortest length at which `charset` can name `count` distinct labels.
-pub fn length(count: usize, charset: &[char]) -> usize {
-    let base = charset.len();
-    let mut length = 1;
-    while base.saturating_pow(length as u32) < count {
-        length += 1;
-    }
-    length
-}
-
-/// Fixed-length labels over `charset`.
+/// Labels for `count` targets, in the order the targets are given.
 ///
-/// Because every label is the same length, no label can be a prefix of another,
-/// which is what lets hint mode act the moment a typed prefix matches exactly
-/// one target: a unique match *is* a complete label.
+/// Every label is the same length by construction, so no label is a prefix of
+/// another and a unique match is a complete label. The length is the shortest
+/// the alphabet can name `count` targets in, and whatever room is left over
+/// becomes one-character labels for the first targets: giving up one short label
+/// frees `charset.len() - 1` longer ones, so the number of short labels is the
+/// spare room divided by that.
+///
+/// The short labels go to the targets the caller lists first, which is how a
+/// target that matters more costs fewer keystrokes.
 pub fn assign(count: usize, charset: &[char]) -> Vec<String> {
     if count == 0 || charset.is_empty() {
         return Vec::new();
     }
-    let length = length(count, charset);
-    (0..count).map(|i| label(i, length, charset)).collect()
+    let base = charset.len();
+    // One character can only ever name one target, so an alphabet of one has
+    // nothing to spread over the rest.
+    if base == 1 {
+        return vec![charset[0].to_string()];
+    }
+    let mut length = 1usize;
+    while base.saturating_pow(length as u32) < count {
+        length += 1;
+    }
+    if length == 1 {
+        return charset[..count.min(base)]
+            .iter()
+            .map(|ch| ch.to_string())
+            .collect();
+    }
+    // Giving up one short label costs `base^(length-1) - 1` s-char labels: the
+    // shorter ones are as long as `base^(length-1)` apart. At length two that is
+    // the `base - 1` of the rule this follows.
+    let room = base.saturating_pow(length as u32) - count;
+    let denial = base.saturating_pow(length as u32 - 1) - 1;
+    let short = (room / denial).min(base);
+    let mut labels: Vec<String> = charset[..short]
+        .iter()
+        .map(|ch| ch.to_string())
+        .collect();
+    // The longer labels may not start with a character a short label took, or
+    // that short label would be a prefix of them.
+    let tail = base.saturating_pow(length as u32 - 1);
+    for index in 0..((base - short) * tail) {
+        if labels.len() == count {
+            break;
+        }
+        let first = short + index / tail;
+        let rest = index % tail;
+        labels.push(format!("{}{}", charset[first], label(rest, length - 1, charset)));
+    }
+    labels
 }
 
 fn label(mut index: usize, length: usize, charset: &[char]) -> String {
@@ -50,14 +76,33 @@ mod tests {
         "asdfjkl;ghqwertyuiop".chars().collect()
     }
 
+    fn lengths(labels: &[String]) -> Vec<usize> {
+        labels.iter().map(|l| l.chars().count()).collect()
+    }
+
     #[test]
-    fn twenty_characters_name_a_full_lattice_in_two() {
-        // 400 cells is the default budget: 20 x 20.
-        assert_eq!(length(400, &twenty()), 2);
-        assert_eq!(length(401, &twenty()), 3);
-        assert_eq!(length(8000, &twenty()), 3);
-        assert!(length(8001, &twenty()) > MAX_LENGTH);
-        assert!(assign(400, &twenty()).iter().all(|l| l.chars().count() == 2));
+    fn a_full_lattice_is_two_characters_and_nothing_shorter() {
+        // 20 x 20 = 400 leaves no room for a one-character label.
+        let labels = assign(400, &twenty());
+        assert_eq!(labels.len(), 400);
+        assert!(lengths(&labels).iter().all(|len| *len == 2));
+        assert_eq!(labels[0], "aa");
+    }
+
+    #[test]
+    fn spare_room_becomes_one_character_labels_for_the_first_targets() {
+        // 19 spare in the two-character budget, one short label per 19 given up:
+        // 300 targets is 5 short labels and 295 of two.
+        let labels = assign(300, &twenty());
+        let ones = lengths(&labels).iter().filter(|len| **len == 1).count();
+        assert_eq!(ones, 5);
+        assert_eq!(&labels[..5], ["a", "s", "d", "f", "j"]);
+        assert_eq!(labels[5], "ka", "the longer labels skipped the taken ones");
+        // A count that divides exactly leaves none: 400 - 400 is no room.
+        assert!(lengths(&assign(400, &twenty())).iter().all(|len| *len == 2));
+        // 25 targets over a nine-character alphabet: (81-25)/8 = 7 short.
+        let labels = assign(25, &charset());
+        assert_eq!(lengths(&labels).iter().filter(|len| **len == 1).count(), 7);
     }
 
     #[test]
@@ -84,11 +129,17 @@ mod tests {
 
     #[test]
     fn the_length_grows_with_the_target_count() {
-        assert!(assign(4, &charset()).iter().all(|l| l.chars().count() == 1));
-        assert!(assign(9, &charset()).iter().all(|l| l.chars().count() == 1));
-        assert!(assign(10, &charset()).iter().all(|l| l.chars().count() == 2));
-        assert!(assign(81, &charset()).iter().all(|l| l.chars().count() == 2));
-        assert!(assign(82, &charset()).iter().all(|l| l.chars().count() == 3));
+        // Nine characters: up to nine targets fit in one, up to 81 in two.
+        assert!(lengths(&assign(4, &charset())).iter().all(|len| *len == 1));
+        assert!(lengths(&assign(9, &charset())).iter().all(|len| *len == 1));
+        // Ten targets: eight of them are one character, the last two need two.
+        let labels = assign(10, &charset());
+        assert_eq!(labels.len(), 10);
+        assert!(lengths(&labels).iter().all(|len| *len <= 2));
+        assert_eq!(lengths(&labels).iter().filter(|len| **len == 1).count(), 8);
+        assert!(lengths(&assign(81, &charset())).iter().all(|len| *len == 2));
+        assert!(lengths(&assign(82, &charset())).iter().all(|len| *len <= 3));
+        assert!(lengths(&assign(82, &charset())).iter().any(|len| *len == 3));
     }
 
     #[test]

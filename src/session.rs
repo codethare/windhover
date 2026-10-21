@@ -11,7 +11,6 @@ use anyhow::Result;
 use xkbcommon::xkb;
 
 use crate::config::Config;
-use crate::hint::labels;
 use crate::hint::lattice::Lattice;
 use crate::keys::{Action, Keysym};
 use crate::mode::grid::Grid;
@@ -107,6 +106,8 @@ pub struct Session {
     grid: Grid,
     hint: Hint,
     cell_labels: Vec<String>,
+    /// The hint lattice's cell boundaries, for the grid the labels sit on.
+    hint_lines: (Vec<f64>, Vec<f64>),
     /// The factor every movement and scroll is scaled by: the speed preset.
     speed: f64,
     /// Keys held down that repeat, with the time their next repeat is due.
@@ -133,6 +134,7 @@ impl Session {
             grid: Grid::new(screen, 2, 2, 40.0),
             hint: Hint::default(),
             cell_labels: Vec::new(),
+            hint_lines: (Vec::new(), Vec::new()),
             speed: 1.0,
             held: Vec::new(),
             oneshot,
@@ -468,11 +470,13 @@ impl Session {
     }
 
     fn reset_hint(&mut self) {
-        let lattice = Lattice {
-            cell: self.config.hint_cell_for(self.screen),
-        };
+        let lattice = Lattice::capped(
+            self.config.hint_cell_for(self.screen),
+            self.config.hint_charset.len(),
+        );
         let cells = lattice.cells(self.screen);
         self.hint = Hint::new(cells, &self.config.hint_charset);
+        self.hint_lines = lattice.lines(self.screen);
     }
 
     pub fn frame(&self, scale: f32) -> Frame<'_> {
@@ -482,6 +486,10 @@ impl Session {
             .flatten();
         frame.dragging = self.normal.dragging();
         frame.speed = self.speed;
+        // The label has to keep its angular size, not its pixel size: a type
+        // size fixed at 14 is 19 minutes of arc on a 1440p panel and 13 on a 4K
+        // one, which is the difference between reading it and squinting.
+        frame.label_size = self.config.theme.badge_font_size * (self.screen.1 as f32 / 720.0);
         if self.mode == Mode::Grid {
             frame.grid = Some(GridFrame {
                 grid: &self.grid,
@@ -489,7 +497,10 @@ impl Session {
             });
         }
         if self.mode == Mode::Hint {
-            frame.hint = Some(HintFrame { hint: &self.hint });
+            frame.hint = Some(HintFrame {
+                hint: &self.hint,
+                lines: &self.hint_lines,
+            });
         }
         frame
     }
@@ -524,28 +535,6 @@ fn printable(keysym: Keysym) -> Option<char> {
     }
 }
 
-/// Why the hint lattice cannot be labelled on this output, if it cannot.
-///
-/// The cell count follows the output size, so the label budget is checked with
-/// the output in hand rather than in the file parser.
-fn hint_density_error(config: &Config, screen: (u32, u32)) -> Option<String> {
-    let cells = Lattice {
-        cell: config.hint_cell_for(screen),
-    }
-    .cells(screen)
-    .len();
-    let length = labels::length(cells, &config.hint_charset);
-    (length > labels::MAX_LENGTH).then(|| {
-        format!(
-            "`hint_cell` asks for {cells} hint targets on this {}x{} output, which needs \
-             {length} characters per label; the most a label may carry is {}",
-            screen.0,
-            screen.1,
-            labels::MAX_LENGTH
-        )
-    })
-}
-
 pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) -> Result<()> {
     // Read the configuration before connecting: a bad `--config` path should
     // fail immediately rather than after the overlay has taken the keyboard.
@@ -568,10 +557,6 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
             config.bindings.grid_cells.len()
         );
     }
-    if let Some(message) = hint_density_error(&config, screen) {
-        anyhow::bail!("{message}");
-    }
-
     let mut session = Session::new(screen, config, oneshot);
     session.observe_cursor(wl.state.cursor());
     if start != Mode::Normal {
@@ -579,12 +564,13 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         // going through normal mode, so the mode state has to be primed.
         session.switch_to(start);
     }
+    let mut badges = render::Badges::default();
     let (mut fonts, warning) = Fonts::load(&session.config.theme.font_family);
     if let Some(warning) = warning {
         eprintln!("{warning}");
     }
 
-    redraw(&mut wl, &session, &mut fonts)?;
+    redraw(&mut wl, &session, &mut fonts, &mut badges)?;
 
     let mut exit = false;
     while !exit && !wl.state.closed && !interrupted() {
@@ -686,7 +672,7 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         }
 
         if session.take_redraw() {
-            redraw(&mut wl, &session, &mut fonts)?;
+            redraw(&mut wl, &session, &mut fonts, &mut badges)?;
         }
     }
 
@@ -694,7 +680,12 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
     Ok(())
 }
 
-fn redraw(wl: &mut Wayland, session: &Session, fonts: &mut Option<Fonts>) -> Result<()> {
+fn redraw(
+    wl: &mut Wayland,
+    session: &Session,
+    fonts: &mut Option<Fonts>,
+    badges: &mut render::Badges,
+) -> Result<()> {
     let scale = wl.state.pixel_scale();
     let frame = session.frame(scale);
     let theme = session.config.theme.clone();
@@ -702,7 +693,7 @@ fn redraw(wl: &mut Wayland, session: &Session, fonts: &mut Option<Fonts>) -> Res
         let Some(mut canvas) = Canvas::new(pixels, width, height) else {
             return;
         };
-        render::draw(&mut canvas, &theme, fonts, &frame);
+        render::draw(&mut canvas, &theme, fonts, badges, &frame);
     })
 }
 
@@ -719,20 +710,6 @@ mod tests {
         Session::new((1280, 720), Config::default(), true)
     }
 
-    #[test]
-    fn a_lattice_too_dense_to_label_is_named() {
-        let config = Config::default();
-        assert_eq!(hint_density_error(&config, (1280, 720)), None);
-        let dense = Config {
-            hint_cell: Some(10.0),
-            ..Config::default()
-        };
-        let message = hint_density_error(&dense, (1280, 720)).expect("no refusal");
-        assert!(message.contains("hint_cell"), "{message}");
-        assert!(message.contains("4 characters"), "{message}");
-        assert!(message.contains("9216"), "{message}");
-    }
-
     fn move_dx(effects: &[Effect]) -> f64 {
         effects
             .iter()
@@ -741,6 +718,26 @@ mod tests {
                 _ => None,
             })
             .expect("no move")
+    }
+
+    #[test]
+    fn the_label_type_size_follows_the_output_height() {
+        // A label has to keep its angular size: 14 logical pixels on a 720-high
+        // output is what the theme names, and a taller one scales from there.
+        let small = Session::new((1280, 720), Config::default(), false);
+        assert_eq!(small.frame(1.0).label_size, 14.0);
+        let large = Session::new((2560, 1440), Config::default(), false);
+        assert_eq!(large.frame(1.0).label_size, 28.0);
+    }
+
+    #[test]
+    fn the_lattice_is_capped_at_the_alphabet_size() {
+        let session = Session::new((3840, 2160), Config::default(), false);
+        let alphabet = session.config.hint_charset.len();
+        let lattice = Lattice::capped(session.config.hint_cell_for(session.screen), alphabet);
+        let (columns, rows) = lattice.lines(session.screen);
+        assert!(columns.len() - 1 <= alphabet, "{} columns", columns.len() - 1);
+        assert!(rows.len() - 1 <= alphabet, "{} rows", rows.len() - 1);
     }
 
     #[test]
@@ -951,7 +948,8 @@ mod tests {
     }
 
     #[test]
-    fn every_visible_change_asks_for_a_redraw() {        let mut session = session();
+    fn every_visible_change_asks_for_a_redraw() {
+        let mut session = session();
         assert!(session.take_redraw(), "the first frame has to be drawn");
         assert!(!session.take_redraw());
 
@@ -963,7 +961,9 @@ mod tests {
         // A hint label character only narrows the candidates.
         press(&mut session, "f");
         assert!(session.take_redraw(), "entering hint mode drew nothing");
-        assert!(press(&mut session, "a").is_empty());
+        // `k` narrows without completing: the one-character labels are the
+        // first five, so this one is still a prefix.
+        assert!(press(&mut session, "k").is_empty());
         assert!(session.take_redraw(), "the filtered labels are not shown");
 
         // And a plain move, which does produce an effect.

@@ -97,6 +97,12 @@ impl Theme {
         self.panel.with_alpha(0x28)
     }
 
+    /// The lattice's own lines: quieter than grid mode's, because they are a map
+    /// of the whole screen rather than the edges of one region.
+    pub fn hint_line(&self) -> Rgba {
+        self.panel_edge.with_alpha(0x5A)
+    }
+
     /// Everything tinted deriv[ies] from [`Theme::accent`] rather than naming a
     /// colour of its own, so a single configuration line moves the whole
     /// interface together.
