@@ -27,8 +27,9 @@ See `proposal.md`. The pieces this touches:
 **Non-Goals:**
 
 - Handing the keyboard back without ending the session. `zwlr_layer_shell_v1` has
-  no request to re-take exclusive keyboard focus, so a session that gave it up
-  could never take input again.
+  no request that reliably re-takes exclusive keyboard focus — the flag can be set
+  back, but nothing obliges a compositor to focus the surface again — so a session
+  that gave it up could never count on taking input again.
 - A separate "click and hand over" key next to a click that stays. Two behaviours
   for one button is a distinction the user has to remember for a case — repeated
   clicks in one session — that a keyboard cursor rarely needs.
@@ -53,18 +54,19 @@ exits once.
 A compositor keeps the keyboard with an exclusive layer surface while it is
 mapped, so a click that arrives while the grab is held cannot leave a focus
 behind: river drops the focus request outright, sway grants it at the press and
-loses it when the surface goes away, and only niri remembers the on-demand surface
-long enough to re-evaluate after it. `Wayland::release_keyboard_and_click`
-therefore sets `keyboard_interactivity` to `none`, roundtrips — the roundtrip is
-what makes that order real, rather than two requests a compositor may handle as
-one batch — and only then presses the button. There is no request to take the grab
-back, which is why a click ends the session.
+loses it when the surface goes away, and only niri (26.04, observed) remembers the
+on-demand surface long enough to re-evaluate after it.
+`Wayland::release_keyboard_and_click` therefore sets `keyboard_interactivity` to
+`none`, roundtrips — the roundtrip is what makes that order real, rather than two
+requests a compositor may handle as one batch — and only then presses the button.
+Nothing obliges a compositor to give the grab back, which is why a click ends the
+session.
 
-Unmapping the overlay first would work for the focus and does not: `wlr-layer-shell`
-clients cannot be sure the compositor re-derives the pointer focus from the next
-motion it queues, and on river roughly one click in four then never reached the
-surface underneath — a click is too expensive to lose. Dropping only the grab
-leaves the pointer where it was.
+Unmapping the overlay first would fix the focus and loses clicks: with the surface
+gone the compositor has to re-derive the pointer focus, and on river (0.5.0-dev,
+observed) roughly one click in four never reached the surface underneath, because
+that re-derivation waits for a motion the compositor queues behind the press.
+Dropping only the grab leaves the surface, and the pointer focus, where they were.
 
 ### A drag is not a click
 

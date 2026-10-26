@@ -41,3 +41,45 @@ the session.
 - **WHEN** a mode asks to scroll up by one step
 - **THEN** the target application receives one discrete wheel event, does not read
   it as continuous touchpad scrolling, and the session keeps running
+
+### Requirement: Exclusive keyboard and key resolution
+
+A session SHALL hold the keyboard exclusively for the lifetime of its overlay, so
+that keys do not reach other applications, **except for the turn a click ends it**:
+before the button is pressed the layer surface SHALL stop asking for the keyboard,
+because a compositor keeps an exclusive layer surface's keyboard and would refuse
+or revoke the focus the click asks for. The overlay itself SHALL stay mapped until
+the session exits, so the pointer keeps landing where it did. Keys SHALL be
+resolved to bindable symbols through the current xkb layout rather than by
+hard-coded keycode, and Shift and other modifiers SHALL be distinguishable, as
+SHALL key auto-repeat.
+
+#### Scenario: The grab is given up for a click
+
+- **WHEN** a mode injects a click
+- **THEN** the layer surface stops asking for the keyboard before the press, the
+  overlay stays mapped, and the session exits without taking the grab back
+
+#### Scenario: Keys are not passed through
+
+- **WHEN** a session is active, no click has been injected, and the user presses an
+  ordinary character key
+- **THEN** that key has no effect on any other application
+
+#### Scenario: Bindings independent of layout
+
+- **WHEN** the user's xkb layout maps a physical key to a different symbol than
+  the default
+- **THEN** the binding takes effect by the resolved symbol, not by physical
+  position
+
+#### Scenario: Holding a movement key
+
+- **WHEN** the user holds a movement key past the repeat delay
+- **THEN** the pointer keeps moving at a fixed rate until the key is released
+
+#### Scenario: A key that cannot be resolved
+
+- **WHEN** a key arrives that maps to no symbol, or a non-keyboard event arrives
+- **THEN** the session ignores it and keeps running, without exiting and without
+  reporting an error

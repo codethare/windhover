@@ -1,8 +1,8 @@
 //! Virtual pointer: absolute motion, buttons, wheel.
 
 use wayland_client::{
-    protocol::{wl_output, wl_pointer, wl_seat},
-    Proxy, QueueHandle,
+    protocol::{wl_pointer, wl_seat},
+    QueueHandle,
 };
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
@@ -19,21 +19,21 @@ pub struct VirtualPointer {
 }
 
 impl VirtualPointer {
-    /// `create_virtual_pointer_with_output` is version 2; compositors that only
-    /// advertise version 1 get the plain constructor and therefore position the
-    /// pointer in the global coordinate space.
+    /// Absolute motion is in the compositor's layout, not on one output.
+    ///
+    /// `create_virtual_pointer_with_output` would address a single output, which
+    /// is the smaller space, but the three compositors do not agree on it: niri
+    /// maps a bound pointer's `y` through the output's transform and a warp lands
+    /// reflected. The layout space is what a pointer created without an output
+    /// gets on all of them, so the caller translates into it instead.
     pub fn create(
         manager: &zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
         seat: Option<&wl_seat::WlSeat>,
-        output: Option<&wl_output::WlOutput>,
         qh: &QueueHandle<State>,
     ) -> Self {
-        let proxy = if wants_output_variant(manager.version()) {
-            manager.create_virtual_pointer_with_output(seat, output, qh, ())
-        } else {
-            manager.create_virtual_pointer(seat, qh, ())
-        };
-        Self { proxy }
+        Self {
+            proxy: manager.create_virtual_pointer(seat, qh, ()),
+        }
     }
 
     /// The last addressable coordinate is `extent - 1`: `motion_absolute`
@@ -90,27 +90,4 @@ pub fn timestamp_ms() -> u32 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u32)
         .unwrap_or(0)
-}
-
-/// `create_virtual_pointer_with_output` arrived in version 2; binding it on a
-/// version 1 manager is a protocol error, so the constructor has to be chosen
-/// from the version the compositor actually advertised.
-fn wants_output_variant(manager_version: u32) -> bool {
-    manager_version >= 2
-}
-
-#[cfg(test)]
-mod tests {
-    use super::wants_output_variant;
-
-    #[test]
-    fn version_one_manager_uses_the_plain_constructor() {
-        assert!(!wants_output_variant(1));
-    }
-
-    #[test]
-    fn version_two_manager_binds_the_pointer_to_an_output() {
-        assert!(wants_output_variant(2));
-        assert!(wants_output_variant(3));
-    }
 }

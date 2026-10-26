@@ -38,3 +38,25 @@
       underneath, because the pointer focus is re-derived from a queued motion
 - [x] 4.4 `sh scripts/headless-check.sh` on sway, niri and river: all checks passed
       (river four times, for the click that was being lost)
+
+## 5. What the review changed
+
+- [x] 5.1 `Effect::Click` ends the session in the driver, so "a click is the last
+      thing" no longer rests on `finish` appending an exit that a future effect
+      source could bypass; the append stays for the effect list the tests assert
+- [x] 5.2 The reason beside `finish`'s append and beside the order test says what is
+      true now (the grab is gone, not "the compositor takes it back")
+- [x] 5.3 The grid and hint deltas say "the keyboard grab is given up", not "the
+      overlay is removed", which the rejected alternative did
+- [x] 5.4 No repaint after the click was tried and **rejected**: without that
+      commit river loses the press when the session tears its surface down in the
+      same flush (2 runs of 2 → 3 and 4 lost buttons; with the repaint, 10 runs
+      clean). The repaint stays, with the measurement beside it
+- [x] 5.5 The panel check asserts the session's exit status and empty stderr, and
+      kills a leftover session on every failure branch
+- [x] 5.6 The exclusive-keyboard requirement in `openspec/specs/pointer-session` is
+      overridden by a delta: the grab is held for the overlay's life, except for the
+      turn a click ends it (without that delta, archiving contradicts the code)
+- [x] 5.7 Wording: "no request to ask for it back" became "nothing obliges a
+      compositor to give it back"; the sway skip notes upstream's separate defect
+      without borrowing it as the reason

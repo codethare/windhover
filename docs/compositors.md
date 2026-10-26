@@ -25,13 +25,34 @@ where the pointer actually landed rather than on "it did not crash":
 sh scripts/headless-check.sh sway
 sh scripts/headless-check.sh river
 sh scripts/headless-check.sh niri
+sh scripts/dual-output-check.sh     # sway only: one output per check cannot show it
 ```
+
+The counts below are the assertions that run on each compositor: a check whose
+premise that compositor cannot exhibit is skipped and counted out. CI runs the
+sway column only, so the on-demand panel check — which sway skips — is a manual
+gate on river or niri.
 
 | compositor | result | notes |
 |---|---|---|
-| **sway** 1.12 | 26/26 | headless backend, `WLR_RENDERER=pixman` |
-| **river** 0.5.0-dev + tailrace | 26/26 | river is only the compositor; the window management policy comes from the window manager given to `-c` |
-| **niri** 26.04 | 26/26 | no headless backend of its own, so it is run nested inside the headless sway; it picks the winit backend and the output is a window there |
+| **sway** 1.12 | 47/48 | headless backend, `WLR_RENDERER=pixman`; the on-demand panel check is skipped (the hover is the hand-over there) |
+| **river** 0.5.0-dev + tailrace | 48/48 | river is only the compositor; the window management policy comes from the window manager given to `-c` |
+| **niri** 26.04 | 46/48 | no headless backend of its own, so it is run nested inside the headless sway; it picks the winit backend and the output is a window there. Two checks are skipped: a seat always has a keyboard, and it never takes the keyboard from a session |
+
+## Several outputs
+
+The virtual pointer addresses the compositor's layout, not one output:
+`motion_absolute` is normalised over the box the outputs occupy, and on all three
+compositors that box starts at the leftmost output's corner rather than at
+(0, 0). A session learns which output the overlay is on from `wl_surface::enter`,
+and moves the overlay-local point to that output's place in the box; without
+`zxdg_output_v1` no output reports a position, and an overlay on an output away
+from the box's corner cannot be aimed at — which the session says once on stderr.
+
+`scripts/dual-output-check.sh` is the check for it: headless sway with both
+outputs away from the origin, where a missing translation puts the pointer in the
+empty space before them. `scripts/headless-check.sh` cannot see this, because one
+output at the origin needs no translation.
 
 ## Things that differ per compositor
 
@@ -69,7 +90,11 @@ These came out of the runs above; they are worth knowing before filing a bug.
   on-demand keyboard focus ends the session at that moment, before any click is
   injected: the session lost the keyboard, which is its own exit condition. The
   hand-over is the hover there, not the click, so the panel check in the suite is
-  skipped on sway.
+  skipped on sway — and a click aimed at such a panel never reaches the widget
+  under it, only the focus moves. Separately, sway 1.12 drops that focus again
+  when another layer surface goes away, which upstream fixed after 1.12
+  (`layer_shell: fix focus stealing for ON_DEMAND surfaces`); that is a second
+  defect, and not why the check is skipped.
 
 ### river
 

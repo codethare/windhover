@@ -161,8 +161,9 @@ fn compute_geometry(
     }
 }
 
-/// The layer surface itself. Recreated when the session needs the overlay out
-/// of the way (to click through it) and then back.
+/// The layer surface itself. Created once, when the overlay is placed; what
+/// changes during a session is its input region and, for a click, whether it
+/// still asks for the keyboard.
 pub struct Overlay {
     surface: wl_surface::WlSurface,
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
@@ -238,7 +239,8 @@ impl Overlay {
 
     /// Give the keyboard up, so that a click on a panel can take it: while an
     /// exclusive layer surface is mapped a compositor keeps the keyboard with it.
-    /// There is no request to ask for it back, and a session that clicks is over.
+    /// The flag can be set back to `exclusive`, but nothing obliges a compositor
+    /// to focus the surface again, and a session that clicks is over anyway.
     pub fn release_keyboard(&self) {
         self.layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);

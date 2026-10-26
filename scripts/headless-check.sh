@@ -440,8 +440,8 @@ else
 fi
 
 echo "check: a click reaches what is under the overlay"
-# The probe is put on the *bottom* layer, so it sits below the overlay: the
-# click can only reach it if the session really did take its overlay down first.
+# The probe is put on the *bottom* layer, so it sits below the overlay: the click
+# reaches it only because the overlay does not take pointer events.
 session_start --grid
 if session_alive; then
   probe_start "--layer bottom"
@@ -558,6 +558,7 @@ if session_alive; then
   LAST_FOCUS=$(grep '^keyboard ' "$RUNTIME/toplevel.out" | tail -1)
   if ! grep -q '^click 272 ' "$RUNTIME/toplevel.out"; then
     fail "the left click did not reach the window (probe output: $(cat "$RUNTIME/toplevel.out" | tr '\n' '|'))"
+    kill "$SESSION_PID" 2>/dev/null || true
   elif session_alive; then
     fail "the session was still running after the click"
     kill "$SESSION_PID" 2>/dev/null || true
@@ -580,10 +581,10 @@ echo "check: a click focuses an on-demand panel and leaves it focused"
 if [ "$COMPOSITOR" = "sway" ]; then
   # sway gives an on-demand layer surface the keyboard as soon as the pointer
   # enters it, so the session ends on the way to the panel and no click is ever
-  # injected; the hover is all sway needs. The click is niri's and river's
-  # requirement, so this shape has nothing to assert there. Sway 1.12 also drops
-  # the focus again when another layer surface goes away, which upstream fixed
-  # after 1.12 (`layer_shell: fix focus stealing for ON_DEMAND surfaces`).
+  # injected; the hover is the hand-over there. The click is niri's and river's
+  # requirement, so this shape has nothing to assert on sway. (Sway 1.12 has a
+  # second defect here — it drops that focus when another layer surface goes
+  # away — which is upstream's and unrelated to this skip.)
   echo "  skip  sway focuses the panel on hover, before a click exists"
 else
   session_start --normal
@@ -597,13 +598,19 @@ else
     LAST_FOCUS=$(grep '^keyboard ' "$RUNTIME/panel.out" | tail -1)
     if ! grep -q '^click 272 ' "$RUNTIME/panel.out"; then
       fail "the click did not reach the panel (probe output: $(cat "$RUNTIME/panel.out" | tr '\n' '|'))"
+      kill "$SESSION_PID" 2>/dev/null || true
     elif session_alive; then
       fail "the session was still running after the click"
       kill "$SESSION_PID" 2>/dev/null || true
-    elif [ "$LAST_FOCUS" != "keyboard enter" ]; then
-      fail "the panel was left without the keyboard (last focus: '${LAST_FOCUS:-none}')"
     else
-      pass "the click reached the on-demand panel and left it with the keyboard"
+      STATUS=$(session_status)
+      if [ "$STATUS" != "0" ] || [ -s "$RUNTIME/session.out" ]; then
+        fail "the click ended the session with status $STATUS: $(cat "$RUNTIME/session.out")"
+      elif [ "$LAST_FOCUS" != "keyboard enter" ]; then
+        fail "the panel was left without the keyboard (last focus: '${LAST_FOCUS:-none}')"
+      else
+        pass "the click reached the on-demand panel and left it with the keyboard"
+      fi
     fi
   else
     fail "session did not start: $(cat "$RUNTIME/session.out")"
@@ -736,8 +743,10 @@ if session_alive; then
     fail "the trace does not show the keyboard focus: $(cat "$RUNTIME/session.out")"
   elif ! grep -q "^TRACE turn " "$RUNTIME/session.out"; then
     fail "the trace does not show the event loop: $(cat "$RUNTIME/session.out")"
+  elif ! grep -q "^TRACE virtual pointer in the layout: .* starts at " "$RUNTIME/session.out"; then
+    fail "the trace does not say where the pointer is addressed: $(grep '^TRACE virtual pointer' "$RUNTIME/session.out")"
   else
-    pass "the trace shows the focus, the keys and the loop"
+    pass "the trace shows the focus, the keys, the loop and the pointer's space"
   fi
 else
   fail "session did not start: $(cat "$RUNTIME/session.out")"

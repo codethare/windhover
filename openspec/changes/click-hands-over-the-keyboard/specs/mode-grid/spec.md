@@ -19,8 +19,9 @@ end the session, as every click does.
 #### Scenario: Position and click
 
 - **WHEN** the user presses `Space` in grid mode
-- **THEN** the overlay is removed before injection, the left button is clicked
-  once at the pointer position, the session switches to normal mode, and it then
+- **THEN** the keyboard grab is given up before the press, the left button is
+  clicked once at the pointer position (the overlay itself stays, so the pointer
+  lands where it already was), the session switches to normal mode, and it then
   exits with status 0
 
 #### Scenario: Exiting

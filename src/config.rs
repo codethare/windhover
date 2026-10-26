@@ -237,21 +237,27 @@ impl Loader {
     }
 
     fn bind(&mut self, action: Action, value: &str) -> std::result::Result<(), String> {
-        // Removing every binding for the action is what makes one line enough to
-        // rebind a key: the first mention of an option has to displace its
-        // defaults, and later mentions have to be able to add to it.
-        if self.replaced.insert(action) {
-            self.config.bindings.remove(action);
-        }
-        if value.eq_ignore_ascii_case("unbind") {
-            if self.replaced.insert(action) {
-                self.config.bindings.remove(action);
+        // Parsed before anything is removed: a line that turns out to be wrong is
+        // a warning, and must not have taken the option's defaults with it — a
+        // typo in `quit` would otherwise leave a session nothing can end.
+        let keys = if value.eq_ignore_ascii_case("unbind") {
+            Vec::new()
+        } else {
+            let keys = parse_keys(value)?;
+            if keys.is_empty() {
+                return Err(format!(
+                    "`{}` needs at least one key",
+                    action_option(action)
+                ));
             }
-            return Ok(());
-        }
-        let keys = parse_keys(value)?;
-        if keys.is_empty() {
-            return Err(format!("`{}` needs at least one key", action_option(action)));
+            keys
+        };
+        // Removing every binding for the action is what makes one line enough to
+        // rebind a key: the first mention of an option displaces its defaults and
+        // later mentions add to what is left. `unbind` always removes, whether it
+        // is the first mention or the third.
+        if self.replaced.insert(action) || keys.is_empty() {
+            self.config.bindings.remove(action);
         }
         for keysym in keys {
             for mode in modes_for(action) {
@@ -360,15 +366,18 @@ fn colour(value: &str) -> std::result::Result<Rgba, String> {
     if digits.len() != 6 && digits.len() != 8 {
         return Err(format!("`{value}` is not RRGGBB or RRGGBBAA"));
     }
-    let byte = |at: usize| {
-        u8::from_str_radix(&digits[at..at + 2], 16)
-            .map_err(|_| format!("`{value}` is not hexadecimal"))
-    };
+    // Checked before the slices below: a `&str` is sliced by byte offset, and a
+    // three-byte character would split one and panic.
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("`{value}` is not hexadecimal"));
+    }
+    let byte =
+        |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).expect("two hexadecimal digits");
     Ok(Rgba::rgba(
-        byte(0)?,
-        byte(2)?,
-        byte(4)?,
-        if digits.len() == 8 { byte(6)? } else { 255 },
+        byte(0),
+        byte(2),
+        byte(4),
+        if digits.len() == 8 { byte(6) } else { 255 },
     ))
 }
 
@@ -621,6 +630,49 @@ mod tests {
         let (config, warnings) = one("normal_up", "unbind");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(config.bindings.normal.get(&parse_key("k").unwrap()), None);
+    }
+
+    #[test]
+    fn a_line_that_cannot_be_parsed_leaves_the_defaults_in_place() {
+        // The line is a warning, and a warning must not cost a key: `quit` with a
+        // typo would otherwise leave a session nothing can end.
+        let (config, warnings) = one("quit", "Escapee");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        for mode in [Mode::Normal, Mode::Grid, Mode::Hint] {
+            assert_eq!(
+                config
+                    .bindings
+                    .table(mode)
+                    .get(&parse_key("Escape").unwrap()),
+                Some(&Action::Quit),
+                "{mode:?} lost its default quit binding"
+            );
+        }
+        assert!(
+            config
+                .bindings
+                .normal
+                .contains_key(&parse_key("h").unwrap())
+        );
+    }
+
+    #[test]
+    fn unbind_after_a_rebind_still_removes_the_key() {
+        // The second mention of an option adds to it, so `unbind` on that second
+        // line has to remove what the first one bound.
+        let (config, warnings) = parse("normal_left: z\nnormal_left: unbind\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.bindings.normal.get(&parse_key("z").unwrap()), None);
+        assert_eq!(config.bindings.normal.get(&parse_key("h").unwrap()), None);
+    }
+
+    #[test]
+    fn a_colour_that_is_not_ascii_hexadecimal_is_a_warning_not_a_panic() {
+        // Eight bytes, six of which are hexadecimal: the count passes and the
+        // bytes do not, which used to slice through the middle of a character.
+        let (config, warnings) = parse("accent: 0A84\u{1F600}\n");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(config.theme.accent, Config::default().theme.accent);
     }
 
     #[test]

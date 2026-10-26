@@ -43,8 +43,8 @@ None.
 
 ### Modified Capabilities
 
-- `pointer-session`: a click carries the session's exit with it, after the press
-  and release have been injected.
+- `pointer-session`: the keyboard grab is given up before the button, and a click
+  carries the session's exit with it, after the press and release are injected.
 - `mode-normal`: the three mouse button keys end the session; ending a drag with a
   click ends it too.
 - `mode-grid`: warp-and-click still hands over to normal mode, and the session
@@ -54,8 +54,11 @@ None.
 
 ## Impact
 
+- `src/wl/overlay.rs` (`release_keyboard`)
+- `src/wl/mod.rs` (`release_keyboard_and_click`, replacing `click`)
 - `src/session.rs` (`finish`: the exit is appended after the click, so every mode
-  inherits it)
+  inherits it; the click itself ends the session in the driver; no repaint after it)
+- `docs/compositors.md`, `README.md`
 - `examples/cursor_probe.rs` (reports the keyboard focus it is given, which is how
   the hand-over is checked)
 - `scripts/headless-check.sh` (the button checks need one session per button, and

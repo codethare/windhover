@@ -5,8 +5,9 @@
 ### Requirement: Behaviour after a match
 
 On a unique match the session SHALL position the pointer at the target's centre,
-remove the overlay so the target window is visible, and by default switch to
-normal mode so the user can adjust. With clicking after a warp enabled, the click
+give up its keyboard grab — the overlay keeps its empty input region, so the
+target window already has the pointer — and by default switch to normal mode so
+the user can adjust. With clicking after a warp enabled, the click
 SHALL end the session, as every click does.
 
 #### Scenario: Position and switch by default
@@ -18,8 +19,8 @@ SHALL end the session, as every click does.
 #### Scenario: Clicking after a match
 
 - **WHEN** the configuration enables clicking after a warp
-- **THEN** after positioning, one left click is injected at the target's centre
-  with the overlay removed, and the session then exits with status 0
+- **THEN** after positioning, the keyboard grab is given up, one left click is
+  injected at the target's centre, and the session then exits with status 0
 
 #### Scenario: Positioning accuracy
 

@@ -355,7 +355,12 @@ impl Session {
     fn act(&mut self, action: Action, fast: bool, held: Duration) -> Vec<Effect> {
         if action == Action::Quit {
             self.held.clear();
-            return vec![Effect::Exit];
+            // A held button outlives the session unless it is let go here: the
+            // compositor has no reason to release a press the application was
+            // given by the session that injected it.
+            let mut effects = self.normal.release_drag();
+            effects.push(Effect::Exit);
+            return effects;
         }
 
         let context = self.context();
@@ -381,11 +386,11 @@ impl Session {
     /// session ends wherever its mode hands over.
     fn finish(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
         let mut effects = self.end_at_handover(effects);
-        // The keyboard is held exclusively, and a layer surface cannot hand it
-        // back: a compositor returns it to this session the moment the click
-        // gives it to the application, which leaves a text field unfocused. So
-        // the click is the session's last act — injecting it and exiting is what
-        // lets the application keep the focus the click just gave it.
+        // The driver gives the keyboard up before it presses the button, so the
+        // click is the last thing that can be done: a session that is still
+        // running afterwards has no keyboard to be pressed, and would end on its
+        // own a moment later with nothing left to act on. The exit travels behind
+        // the click in the same batch, so no effect can be queued in between.
         if effects
             .iter()
             .any(|effect| matches!(effect, Effect::Click { .. }))
@@ -393,8 +398,19 @@ impl Session {
         {
             effects.push(Effect::Exit);
         }
-        self.apply(&effects);
-        effects
+        // A release the session produced while applying its own effects goes
+        // first: a held button would swallow the press that comes after it.
+        let released = self.apply(&effects);
+        if released.is_empty() {
+            return effects;
+        }
+        released.into_iter().chain(effects).collect()
+    }
+
+    /// What the session owes the driver however it ends: the button a drag is
+    /// still holding. `run` sends these before it tears the overlay down.
+    pub fn leaving(&mut self) -> Vec<Effect> {
+        self.normal.release_drag()
     }
 
     /// With `--oneshot`, the hand-over that ends grid or hint mode ends the
@@ -414,9 +430,12 @@ impl Session {
     }
 
     /// Effects the session owns are folded in here; the driver handles the
-    /// rest, which is everything that touches the compositor.
-    fn apply(&mut self, effects: &[Effect]) {
+    /// rest, which is everything that touches the compositor. Whatever the
+    /// session itself gives up on the way (a mode change drops the drag it was
+    /// holding) comes back, because the driver is the only one that can send it.
+    fn apply(&mut self, effects: &[Effect]) -> Vec<Effect> {
         self.redraw = true;
+        let mut produced = Vec::new();
         for effect in effects {
             match effect {
                 Effect::Move { dx, dy } => {
@@ -424,11 +443,12 @@ impl Session {
                 }
                 Effect::Warp { x, y } => self.warp_cursor(*x, *y),
                 Effect::Speed(speed) => self.speed = *speed,
-                Effect::Switch(mode) => self.switch(*mode),
+                Effect::Switch(mode) => produced.extend(self.switch(*mode)),
                 Effect::Exit => self.held.clear(),
                 _ => {}
             }
         }
+        produced
     }
 
     fn warp_cursor(&mut self, x: f64, y: f64) {
@@ -438,20 +458,30 @@ impl Session {
         );
     }
 
-    /// Enter a mode directly, as a command-line flag does.
+    /// Enter a mode directly, as a command-line flag does. A session that has
+    /// not taken a key yet holds nothing back, so there is nothing to release.
     pub fn switch_to(&mut self, mode: Mode) {
-        self.switch(mode);
+        let released = self.switch(mode);
+        debug_assert!(
+            released.is_empty(),
+            "a session that has not run holds no button"
+        );
     }
 
-    fn switch(&mut self, mode: Mode) {
+    /// Leaving normal mode gives up the drag it was holding. The release is
+    /// returned, not applied: only the driver can send it, and dropping it here
+    /// is what used to leave the application's button down after `v` then `g`.
+    /// The drag ends rather than following the mode, so that a mode which clicks
+    /// (grid's warp-and-click) never presses on top of a held button.
+    fn switch(&mut self, mode: Mode) -> Vec<Effect> {
         if mode == self.mode {
-            return;
+            return Vec::new();
         }
-        let mut effects = Vec::new();
-        if self.mode == Mode::Normal {
-            effects = self.normal.release_drag();
-        }
-        self.apply(&effects);
+        let released = if self.mode == Mode::Normal {
+            self.normal.release_drag()
+        } else {
+            Vec::new()
+        };
         trace::log(format_args!("mode {:?} -> {mode:?}", self.mode));
         self.held.clear();
         self.redraw = true;
@@ -461,6 +491,7 @@ impl Session {
             Mode::Hint => self.reset_hint(),
             Mode::Normal => {}
         }
+        released
     }
 
     fn reset_grid(&mut self) {
@@ -668,7 +699,13 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                 // event or a held button lands where the pointer is. A click also
                 // hands the keyboard over first: an exclusive layer surface keeps
                 // it, and the focus the click asks for cannot survive that.
-                Effect::Click { button } => wl.release_keyboard_and_click(button)?,
+                Effect::Click { button } => {
+                    wl.release_keyboard_and_click(button)?;
+                    // The grab is gone with the press, so no key can reach this
+                    // session again: the click ends it here rather than relying
+                    // on the exit appended behind it.
+                    exit = true;
+                }
                 Effect::Scroll { steps } => wl.scroll(steps)?,
                 Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
                 Effect::Switch(_) | Effect::Speed(_) => {}
@@ -685,11 +722,21 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
             ));
         }
 
+        // Kept on the turn a click ends, though nothing new is drawn: without the
+        // extra commit, river loses the press when the session tears its surface
+        // down in the same flush (two runs in two, four buttons lost; with the
+        // repaint, six runs clean).
         if session.take_redraw() {
             redraw(&mut wl, &session, &mut fonts, &mut badges)?;
         }
     }
 
+    // However the session ended — a key, a signal, the compositor closing the
+    // overlay, the keyboard going away — a button it is holding is still held in
+    // the application, which has no way to learn otherwise.
+    if let Some(Effect::Drag(pressed)) = session.leaving().into_iter().next() {
+        wl.button(BTN_LEFT, pressed)?;
+    }
     wl.finish();
     Ok(())
 }
@@ -882,9 +929,9 @@ mod tests {
 
     #[test]
     fn a_click_is_the_last_thing_a_session_does() {
-        // The keyboard is held exclusively, so a click that focuses an
-        // application ends the session: anything injected after it would leave
-        // the field the click just focused unfocused again.
+        // The driver gives the keyboard up with the click, so anything injected
+        // after it would have no keyboard to be pressed — and no session left to
+        // receive it.
         let mut session = session();
         assert_eq!(
             press(&mut session, "m"),
@@ -1145,6 +1192,52 @@ mod tests {
         assert_eq!(effects, vec![Effect::Drag(false)]);
         assert_eq!(session.time_to_next_repeat(start), None, "the pointer kept moving");
         assert!(!session.frame(1.0).dragging);
+    }
+
+    #[test]
+    fn leaving_normal_mode_releases_the_drag_it_was_holding() {
+        // `v` then `g`: the button is the session's until it lets go, and only
+        // the driver can send the release. It has to come first, or the held
+        // button swallows whatever press follows it.
+        let mut session = session();
+        press(&mut session, "v");
+        assert_eq!(
+            press(&mut session, "g"),
+            vec![Effect::Drag(false), Effect::Switch(Mode::Grid)]
+        );
+        assert!(!session.frame(1.0).dragging);
+    }
+
+    #[test]
+    fn a_mode_change_without_a_drag_adds_nothing() {
+        let mut session = session();
+        assert_eq!(press(&mut session, "g"), vec![Effect::Switch(Mode::Grid)]);
+    }
+
+    #[test]
+    fn quitting_releases_the_drag_it_was_holding() {
+        // Escape takes the session out from under the drag: the application
+        // would keep the button down for as long as it is running.
+        let mut session = session();
+        press(&mut session, "v");
+        assert_eq!(
+            press(&mut session, "Escape"),
+            vec![Effect::Drag(false), Effect::Exit]
+        );
+    }
+
+    #[test]
+    fn a_session_that_ends_any_other_way_owes_the_drag_once() {
+        // A signal, the compositor closing the overlay, the keyboard going away:
+        // none of them pass through an effect, so `run` asks on the way out.
+        let mut session = session();
+        assert!(session.leaving().is_empty());
+        press(&mut session, "v");
+        assert_eq!(session.leaving(), vec![Effect::Drag(false)]);
+        assert!(
+            session.leaving().is_empty(),
+            "the button was released twice"
+        );
     }
 
     #[test]

@@ -23,10 +23,10 @@ continuous interaction rather than three separate tools.
 
 A click is the last thing a session does: the keyboard is given up, the button is
 injected, and the session exits. That order is the point. The overlay holds the
-keyboard exclusively while it is up, so a click that arrives first is refused the
-focus it asks for, or loses it again when the surface goes away — river and sway
-take different routes to the same result. With the grab dropped before the press,
-what the click focuses keeps it.
+keyboard exclusively while it is up and a compositor keeps it there, so a click
+that arrives first is refused the focus it asks for — or, on a panel that asks for
+on-demand interactivity, granted and then lost again when the surface goes away.
+With the grab dropped before the press, what the click focuses keeps it.
 
 ## Why compositor hotkeys
 
@@ -48,9 +48,9 @@ The compositor must implement both:
 
 | compositor | status |
 |---|---|
-| sway | supported, tested (26/26) |
-| niri | supported, tested (26/26) |
-| river, with a `river-window-management-v1` window manager such as [tailrace](https://github.com/riverwm/tailrace) | supported, tested (26/26) |
+| sway | supported, tested (47/48, one path it cannot show) |
+| niri | supported, tested (46/48, two paths it cannot show) |
+| river, with a `river-window-management-v1` window manager such as [tailrace](https://github.com/riverwm/tailrace) | supported, tested (48/48) |
 
 See [docs/compositors.md](docs/compositors.md) for how that was measured, and for
 the per-compositor differences worth knowing about.

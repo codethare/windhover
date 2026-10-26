@@ -17,7 +17,7 @@
 //! Test infrastructure only — it is not part of the shipped binary.
 //!
 //! With `--layer bottom` the probe sits below the overlay layer, so a click only
-//! reaches it if the session really did take its overlay down first. With
+//! reaches it because the session's overlay stopped taking pointer events. With
 //! `--fill RRGGBB` it paints the output that colour, which is how the overlay is
 //! looked at over a light background without needing a light application.
 //!

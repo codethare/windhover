@@ -26,6 +26,8 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
 };
 
+use crate::trace;
+
 use output::OutputEntry;
 use overlay::{BufferRing, Overlay};
 use pointer::VirtualPointer;
@@ -49,6 +51,10 @@ pub struct State {
     pub outputs: Vec<OutputEntry>,
     pub overlay: Option<Overlay>,
     pub ring: Option<BufferRing>,
+    /// The output the overlay was placed on, as the compositor reported it.
+    /// `output_index` is only what was asked for; this is the answer, and it is
+    /// what the virtual pointer has to be bound to.
+    pub overlay_output: Option<usize>,
     pub output_index: Option<usize>,
     pub keys: Keyboard,
     /// Where the compositor last reported the pointer. Only filled during the
@@ -58,7 +64,32 @@ pub struct State {
     pub closed: bool,
     pub keyboard_ready: bool,
     pub pointer_ready: bool,
+    /// Set once the layout fallback has been explained, so it is said once.
+    space_warned: bool,
     vp: Option<VirtualPointer>,
+}
+
+/// Where absolute pointer coordinates are measured from, and how far they reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PointerSpace {
+    origin: (i32, i32),
+    extent: (u32, u32),
+}
+
+impl PointerSpace {
+    /// Absolute motion is normalised over the box the outputs occupy, so an
+    /// overlay-local point reaches the right output by moving from the overlay's
+    /// own corner to its place in that box.
+    fn of(overlay: (u32, u32), overlay_origin: (i32, i32), outputs: &[OutputEntry]) -> Self {
+        let (corner, extent) = output::layout_box(outputs, overlay);
+        Self {
+            origin: (
+                overlay_origin.0.saturating_sub(corner.0),
+                overlay_origin.1.saturating_sub(corner.1),
+            ),
+            extent,
+        }
+    }
 }
 
 impl State {
@@ -82,6 +113,23 @@ impl State {
         self.output()
             .map(|entry| entry.info.logical_size())
             .unwrap_or((0, 0))
+    }
+
+    /// The coordinate space the virtual pointer addresses.
+    ///
+    /// A pointer bound to an output is given that output's own pixels, which is
+    /// what the overlay draws in. An unbound one — a version 1 manager, or an
+    /// output the compositor never told us about — is given the compositor's
+    /// layout, so an overlay-local point has to be moved to where the overlay
+    /// sits before it is normalised against the layout.
+    fn pointer_space(&self) -> PointerSpace {
+        let origin = self
+            .overlay_output
+            .or(self.output_index)
+            .and_then(|index| self.outputs.get(index))
+            .map(|entry| entry.info.logical_origin())
+            .unwrap_or((0, 0));
+        PointerSpace::of(self.logical_size(), origin, &self.outputs)
     }
 
     /// Buffer pixels per logical pixel, so the renderer can draw in logical
@@ -222,11 +270,13 @@ impl Wayland {
             outputs,
             overlay: None,
             ring: None,
+            overlay_output: None,
             output_index: None,
             keys: Keyboard::default(),
             pointer_pos: None,
             closed: false,
             keyboard_ready: false,
+            space_warned: false,
             pointer_ready: false,
             vp: None,
         };
@@ -313,11 +363,14 @@ impl Wayland {
         for candidate in candidates {
             self.state.pointer_pos = None;
             self.create_overlay(candidate)?;
-            self.establish_virtual_pointer()?;
             if self.state.pointer_pos.is_some() {
                 // The pointer position is known, which is the last thing the
                 // overlay was needed for. From here the applications have it.
                 self.hand_over_pointer()?;
+                // Created after placement, never before: a virtual pointer bound
+                // to an output addresses that output's pixels, so the output has
+                // to be the one the overlay is really on.
+                self.establish_virtual_pointer()?;
                 return Ok(());
             }
         }
@@ -326,8 +379,8 @@ impl Wayland {
         // not send enter before the first frame). Keep the compositor's choice.
         self.state.pointer_pos = None;
         self.create_overlay(None)?;
-        self.establish_virtual_pointer()?;
         self.hand_over_pointer()?;
+        self.establish_virtual_pointer()?;
         Ok(())
     }
 
@@ -366,6 +419,9 @@ impl Wayland {
             &self.qh,
         );
         self.state.overlay = Some(overlay);
+        // The surface has not been shown yet, so whatever the previous one
+        // entered says nothing about this one.
+        self.state.overlay_output = None;
 
         for _ in 0..16 {
             self.roundtrip()?;
@@ -419,18 +475,50 @@ impl Wayland {
         if self.state.vp.is_some() {
             return Ok(());
         }
-        let output = self
-            .state
-            .output()
-            .and_then(|entry| entry.output.as_ref());
+        // One more roundtrip so a `wl_surface::Enter` that came with the
+        // configure has been dispatched: without it a compositor that placed the
+        // overlay for us leaves us guessing, and the guess is the origin.
+        self.roundtrip()?;
+        let index = self.state.overlay_output.or(self.state.output_index);
         let pointer = VirtualPointer::create(
             &self.state.vp_manager,
             Some(&self.state.seat),
-            output,
             &self.qh,
         );
+        let space = self.state.pointer_space();
+        let name = index
+            .and_then(|i| self.state.outputs.get(i))
+            .map(|entry| entry.info.name.as_str())
+            .unwrap_or("an unnamed output");
+        trace::log(format_args!(
+            "virtual pointer in the layout: {name} starts at {},{} and the layout is {}x{}",
+            space.origin.0, space.origin.1, space.extent.0, space.extent.1
+        ));
+        self.warn_untranslatable_pointer();
         self.state.vp = Some(pointer);
         Ok(())
+    }
+
+    /// Say so when the layout cannot be translated into: an overlay on an output
+    /// away from the origin needs that output's position, and without
+    /// `zxdg_output_v1` every output claims (0, 0).
+    fn warn_untranslatable_pointer(&mut self) {
+        if self.state.space_warned || self.state.outputs.len() < 2 {
+            return;
+        }
+        if self
+            .state
+            .outputs
+            .iter()
+            .all(|entry| entry.info.position_known())
+        {
+            return;
+        }
+        self.state.space_warned = true;
+        eprintln!(
+            "windhover: no output reported its position (zxdg_output_v1 is missing), so an \
+             overlay on an output away from the layout's origin cannot be aimed at"
+        );
     }
 
     /// Render a frame into a free shared-memory buffer and commit it.
@@ -469,9 +557,14 @@ impl Wayland {
     }
 
     pub fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
-        let (w, h) = self.state.logical_size();
+        let space = self.state.pointer_space();
         if let Some(pointer) = &self.state.vp {
-            pointer.move_absolute(x, y, w.max(1), h.max(1));
+            pointer.move_absolute(
+                x + space.origin.0 as f64,
+                y + space.origin.1 as f64,
+                space.extent.0,
+                space.extent.1,
+            );
         }
         self.conn.flush().context("flush pointer motion")?;
         Ok(())
@@ -573,7 +666,38 @@ delegate_noop!(State: ignore wl_compositor::WlCompositor);
 delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_region::WlRegion);
-delegate_noop!(State: ignore wl_surface::WlSurface);
+/// The overlay's surface is the only `wl_surface` this client creates, so the
+/// output it enters is the output the overlay is on — which is the one the
+/// virtual pointer has to be bound to.
+impl Dispatch<wl_surface::WlSurface, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _: &(),
+        _: &wayland_client::Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let index = |state: &Self, output: &wl_output::WlOutput| {
+            state
+                .outputs
+                .iter()
+                .position(|entry| entry.output.as_ref() == Some(output))
+        };
+        match event {
+            wl_surface::Event::Enter { output } => {
+                state.overlay_output = index(state, &output);
+            }
+            wl_surface::Event::Leave { output }
+                if state.overlay_output == index(state, &output) =>
+            {
+                state.overlay_output = None;
+            }
+            _ => {}
+        }
+    }
+}
+
 delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(State: ignore zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1);
 delegate_noop!(State: ignore zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1);
@@ -585,6 +709,103 @@ delegate_noop!(State: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn two_outputs() -> Vec<OutputEntry> {
+        let side = |x: i32, w: u32| OutputEntry {
+            info: output::OutputInfo {
+                logical_x: x,
+                logical_w: w,
+                logical_h: 720,
+                position_known: true,
+                ..output::OutputInfo::default()
+            },
+            ..OutputEntry::default()
+        };
+        vec![side(0, 1280), side(1280, 1920)]
+    }
+
+    #[test]
+    fn a_single_output_at_the_origin_is_the_overlays_own_pixels() {
+        let space = PointerSpace::of((1280, 720), (0, 0), &two_outputs()[..1]);
+        assert_eq!(
+            space,
+            PointerSpace {
+                origin: (0, 0),
+                extent: (1280, 720)
+            },
+            "one output at (0,0) must not be translated"
+        );
+    }
+
+    #[test]
+    fn a_point_moves_to_where_the_overlay_sits_in_the_layout() {
+        // The layout starts at the leftmost output, so the overlay on the second
+        // one is 1280 in from that corner.
+        let space = PointerSpace::of((1920, 1080), (1280, 0), &two_outputs());
+        assert_eq!(
+            space,
+            PointerSpace {
+                origin: (1280, 0),
+                extent: (3200, 720)
+            }
+        );
+    }
+
+    #[test]
+    fn a_layout_with_no_output_at_the_origin_still_starts_at_its_corner() {
+        // Both outputs start away from (0, 0): the overlay on the first one is at
+        // the box's corner, so its own x=0 is x=0 in the box.
+        let outputs = [
+            OutputEntry {
+                info: output::OutputInfo {
+                    logical_x: 1280,
+                    logical_w: 1280,
+                    logical_h: 720,
+                    position_known: true,
+                    ..output::OutputInfo::default()
+                },
+                ..OutputEntry::default()
+            },
+            OutputEntry {
+                info: output::OutputInfo {
+                    logical_x: 2560,
+                    logical_w: 1280,
+                    logical_h: 720,
+                    position_known: true,
+                    ..output::OutputInfo::default()
+                },
+                ..OutputEntry::default()
+            },
+        ];
+        assert_eq!(
+            PointerSpace::of((1280, 720), (1280, 0), &outputs),
+            PointerSpace {
+                origin: (0, 0),
+                extent: (2560, 720)
+            }
+        );
+        assert_eq!(
+            PointerSpace::of((1280, 720), (2560, 0), &outputs),
+            PointerSpace {
+                origin: (1280, 0),
+                extent: (2560, 720)
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_output_origin_leaves_the_coordinates_alone() {
+        // Nothing reported a position or a size, so (0, 0) and the overlay's own
+        // size are all there is.
+        let space = PointerSpace::of((1280, 720), (0, 0), &[]);
+        assert_eq!(
+            space,
+            PointerSpace {
+                origin: (0, 0),
+                extent: (1280, 720)
+            }
+        );
+    }
 
     #[test]
     fn missing_global_names_both_the_capability_and_the_interface() {
