@@ -665,8 +665,10 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                 Effect::Move { .. } | Effect::Warp { .. } => {}
                 // Nothing has to be done to let these through: the overlay gave
                 // the pointer to the application at startup, so a click, a wheel
-                // event or a held button lands where the pointer is.
-                Effect::Click { button } => wl.click(button)?,
+                // event or a held button lands where the pointer is. A click also
+                // hands the keyboard over first: an exclusive layer surface keeps
+                // it, and the focus the click asks for cannot survive that.
+                Effect::Click { button } => wl.release_keyboard_and_click(button)?,
                 Effect::Scroll { steps } => wl.scroll(steps)?,
                 Effect::Drag(pressed) => wl.button(BTN_LEFT, pressed)?,
                 Effect::Switch(_) | Effect::Speed(_) => {}

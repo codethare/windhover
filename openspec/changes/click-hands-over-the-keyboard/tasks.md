@@ -23,3 +23,18 @@
 - [x] 3.2 Run the gate — `cargo test`, `cargo deny check advisories bans`,
       `sh scripts/headless-check.sh` on sway, niri and river, with
       `TAILRACE` pointing at a built window manager
+
+## 4. The grab goes before the button
+
+- [x] 4.1 `Overlay::release_keyboard` sets `keyboard_interactivity` to `none` and
+      commits; `Wayland::release_keyboard_and_click` roundtrips and only then
+      injects the press and release, so the grab is gone before the button
+- [x] 4.2 A panel check: the probe asks for on-demand interactivity, is clicked,
+      and its last keyboard event has to be `enter` — skipped on sway, where the
+      hover hands the keyboard over before a click exists. It fails on river
+      without 4.1 (`last focus: none`)
+- [x] 4.3 Unmapping the overlay instead of dropping the grab was implemented and
+      rejected: on river roughly one click in four never reached the surface
+      underneath, because the pointer focus is re-derived from a queued motion
+- [x] 4.4 `sh scripts/headless-check.sh` on sway, niri and river: all checks passed
+      (river four times, for the click that was being lost)

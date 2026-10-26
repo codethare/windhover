@@ -236,6 +236,15 @@ impl Overlay {
         self.surface.commit();
     }
 
+    /// Give the keyboard up, so that a click on a panel can take it: while an
+    /// exclusive layer surface is mapped a compositor keeps the keyboard with it.
+    /// There is no request to ask for it back, and a session that clicks is over.
+    pub fn release_keyboard(&self) {
+        self.layer_surface
+            .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
+        self.surface.commit();
+    }
+
     pub fn is_configured(&self) -> bool {
         self.configure.is_some()
     }

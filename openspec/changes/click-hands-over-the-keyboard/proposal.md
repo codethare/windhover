@@ -15,17 +15,19 @@ after `m` the field was focused and unfocused inside the same click and typing
 went to the session instead. The same is true of any window: no application can
 be left focused while a session is up.
 
-A layer surface cannot hand the keyboard back and take it again — there is no
-request for it — so the click has to be the last thing a session does. Injecting
-it and exiting is what leaves the application holding the focus the click gave it,
-which is what `m` followed by `Escape` already achieves today, minus the second
-key.
+A layer surface cannot take the keyboard back once it has given it up — there is no
+request for it — so a click has to be the last thing a session does, and the grab
+has to go before the button is pressed: while an exclusive layer surface is
+mapped, a compositor keeps the keyboard with it, and a click that asks for the
+focus of a panel is either refused (river) or granted and revoked when the surface
+goes away (sway). Dropping the grab, clicking, and exiting is what leaves the
+application holding the focus the click gave it.
 
 ## What Changes
 
-- A click ends the session: the button is injected, then the session exits as it
-  does for `Escape`, so the overlay is removed and the keyboard goes to what the
-  click just focused.
+- A click ends the session: the layer surface stops asking for the keyboard, the
+  button is injected, then the session exits as it does for `Escape`, so the
+  keyboard goes to what the click just focused.
 - The three button keys, grid mode's warp-and-click, and hint mode's
   `click_after_warp` all reach the session through the same effect, so all of them
   end it. A drag is untouched: it holds a button rather than clicking, and ends

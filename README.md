@@ -21,10 +21,12 @@ Three modes, one binary, no daemon:
 Grid and hint hand off to normal mode for fine adjustment, so a session is one
 continuous interaction rather than three separate tools.
 
-A click is the last thing a session does: the button is injected and the session
-exits. The keyboard is held exclusively, and a layer surface cannot hand it back,
-so without the exit the compositor would take the click's focus away from the
-field it just focused, and nothing could be typed into it.
+A click is the last thing a session does: the keyboard is given up, the button is
+injected, and the session exits. That order is the point. The overlay holds the
+keyboard exclusively while it is up, so a click that arrives first is refused the
+focus it asks for, or loses it again when the surface goes away — river and sway
+take different routes to the same result. With the grab dropped before the press,
+what the click focuses keeps it.
 
 ## Why compositor hotkeys
 

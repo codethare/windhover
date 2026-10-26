@@ -570,6 +570,46 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
+echo "check: a click focuses an on-demand panel and leaves it focused"
+# The reported case: a panel that follows `wl_keyboard` and asks for on-demand
+# interactivity, the way `aside` does. Its text field is enabled on
+# `keyboard enter` and disabled on `leave`, so the click has to leave the panel
+# holding the keyboard. While the overlay is mapped the keyboard is held
+# exclusively and the session's own exit is a layer surface going away, so the
+# grab has to be given up before the button is pressed.
+if [ "$COMPOSITOR" = "sway" ]; then
+  # sway gives an on-demand layer surface the keyboard as soon as the pointer
+  # enters it, so the session ends on the way to the panel and no click is ever
+  # injected; the hover is all sway needs. The click is niri's and river's
+  # requirement, so this shape has nothing to assert there. Sway 1.12 also drops
+  # the focus again when another layer surface goes away, which upstream fixed
+  # after 1.12 (`layer_shell: fix focus stealing for ON_DEMAND surfaces`).
+  echo "  skip  sway focuses the panel on hover, before a click exists"
+else
+  session_start --normal
+  if session_alive; then
+    "$PROBE" --layer bottom --keyboard on-demand \
+      --min-lifetime 3000 --settle 900 >"$RUNTIME/panel.out" 2>&1 &
+    PANEL_PID=$!
+    sleep 1
+    inject "tap:l tap:m"
+    wait "$PANEL_PID" 2>/dev/null || true
+    LAST_FOCUS=$(grep '^keyboard ' "$RUNTIME/panel.out" | tail -1)
+    if ! grep -q '^click 272 ' "$RUNTIME/panel.out"; then
+      fail "the click did not reach the panel (probe output: $(cat "$RUNTIME/panel.out" | tr '\n' '|'))"
+    elif session_alive; then
+      fail "the session was still running after the click"
+      kill "$SESSION_PID" 2>/dev/null || true
+    elif [ "$LAST_FOCUS" != "keyboard enter" ]; then
+      fail "the panel was left without the keyboard (last focus: '${LAST_FOCUS:-none}')"
+    else
+      pass "the click reached the on-demand panel and left it with the keyboard"
+    fi
+  else
+    fail "session did not start: $(cat "$RUNTIME/session.out")"
+  fi
+fi
+
 echo "check: a drag reaches what is under the overlay"
 # `v` holds the left button down while the direction keys drag the pointer, which
 # is how a text selection is made. The press and every motion after it have to

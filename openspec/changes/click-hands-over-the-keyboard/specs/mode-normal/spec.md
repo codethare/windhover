@@ -5,14 +5,15 @@
 ### Requirement: Mouse button actions
 
 Normal mode SHALL provide three keys that inject a left, middle and right click at
-the current pointer position. A click SHALL end the session, after the button has
-been injected, so the application it landed on keeps the focus the click gave it.
+the current pointer position. A click SHALL end the session, after the keyboard
+grab has been given up and the button injected, so the application it landed on
+keeps the focus the click gave it.
 
 #### Scenario: Left click
 
 - **WHEN** the user presses `m`
-- **THEN** one left click occurs at the current pointer position, the overlay does
-  not intercept that click, and the session exits with status 0
+- **THEN** the layer surface stops asking for the keyboard, one left click occurs
+  at the current pointer position, and the session exits with status 0
 
 #### Scenario: Middle and right click
 

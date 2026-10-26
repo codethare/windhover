@@ -493,15 +493,25 @@ impl Wayland {
         Ok(())
     }
 
-    pub fn click(&mut self, button: u32) -> Result<()> {
+    /// Click under the overlay, and give up the session with it.
+    ///
+    /// The keyboard grab goes before the button is pressed, and the roundtrip is
+    /// what makes that order real: while an exclusive layer surface is mapped a
+    /// compositor keeps the keyboard with it, so a click that asks for focus on a
+    /// panel is refused (river) or taken back when the surface goes away (sway).
+    /// Only the grab is dropped — the surface stays, so the pointer keeps landing
+    /// where it would have anyway.
+    pub fn release_keyboard_and_click(&mut self, button: u32) -> Result<()> {
+        if let Some(overlay) = self.state.overlay.as_ref() {
+            overlay.release_keyboard();
+            self.roundtrip()?;
+        }
         self.button(button, true)?;
         self.button(button, false)
     }
 
-    /// Stop the overlay taking pointer events, so that a click, a wheel event or
-    /// a drag reaches the window underneath. The surface is left mapped:
-    /// destroying it would drop the keyboard grab with it, and the point of the
-    /// overlay staying up is that the session keeps receiving keys.
+    /// Tear the session down: whatever is left of the overlay, its buffers, and
+    /// the virtual pointer.
     pub fn finish(mut self) {
         if let Some(overlay) = self.state.overlay.take() {
             overlay.destroy();

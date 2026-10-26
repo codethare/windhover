@@ -68,8 +68,8 @@ These came out of the runs above; they are worth knowing before filing a bug.
   it, where niri waits for a click. So on sway, moving onto a panel that asks for
   on-demand keyboard focus ends the session at that moment, before any click is
   injected: the session lost the keyboard, which is its own exit condition. The
-  panel has the keyboard, so typing into it works either way — the click is only
-  what niri needs.
+  hand-over is the hover there, not the click, so the panel check in the suite is
+  skipped on sway.
 
 ### river
 
@@ -85,7 +85,9 @@ checked with a screen, a real keyboard and windows on it:
 
 - whether a click reaches the application under the overlay and leaves it with
   the keyboard — the suite verifies the button arrives at a surface *below* the
-  overlay and that the window it landed on is still focused afterwards, which is
+  overlay and that what it landed on is still focused afterwards: an ordinary
+  window, and a layer surface that asks for on-demand keyboard focus (skipped on
+  sway, where the hover hands the keyboard over before a click exists). That is
   the same mechanism, but a real application's opinion is worth having;
 - how the overlay looks over real content. `scripts/capture.sh` renders one
   frame per mode to PNG against a headless compositor, which is enough to catch

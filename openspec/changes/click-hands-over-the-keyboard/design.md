@@ -9,9 +9,10 @@ See `proposal.md`. The pieces this touches:
   repeats. `--oneshot` already turns a hand-over into an exit there.
 - `Effect::Click` is emitted by three places: normal mode's three button keys,
   grid mode's warp-and-click, and hint mode's `click_after_warp`.
-- The driver injects a click with `wl.click`, which is a press and a release on the
-  virtual pointer; the overlay keeps its empty input region, so the click lands on
-  the window underneath.
+- The driver injects a click with `Wayland::release_keyboard_and_click`: the
+  overlay stops asking for the keyboard, and then a press and a release go out on
+  the virtual pointer. The overlay keeps its empty input region, so the pointer was
+  already the application's.
 - The overlay's layer surface asks for an exclusive keyboard and cannot ask for it
   back once it has given it up.
 
@@ -41,11 +42,29 @@ See `proposal.md`. The pieces this touches:
 Every mode's click already passes through `finish`, so one rule there covers
 `m`/`,`/`.` and grid's `Space` and hint's `click_after_warp` without three copies.
 It also fixes the order once: the click is injected first, the exit second, so the
-application has the button before the overlay goes away.
+application has the button before the session ends.
 
 `finish` also maps `Switch(Normal)` to `Exit` for `--oneshot`; the click's exit is
 appended only when the effects do not already carry one, so a one-shot session
 exits once.
+
+### The grab goes before the button, the surface stays
+
+A compositor keeps the keyboard with an exclusive layer surface while it is
+mapped, so a click that arrives while the grab is held cannot leave a focus
+behind: river drops the focus request outright, sway grants it at the press and
+loses it when the surface goes away, and only niri remembers the on-demand surface
+long enough to re-evaluate after it. `Wayland::release_keyboard_and_click`
+therefore sets `keyboard_interactivity` to `none`, roundtrips — the roundtrip is
+what makes that order real, rather than two requests a compositor may handle as
+one batch — and only then presses the button. There is no request to take the grab
+back, which is why a click ends the session.
+
+Unmapping the overlay first would work for the focus and does not: `wlr-layer-shell`
+clients cannot be sure the compositor re-derives the pointer focus from the next
+motion it queues, and on river roughly one click in four then never reached the
+surface underneath — a click is too expensive to lose. Dropping only the grab
+leaves the pointer where it was.
 
 ### A drag is not a click
 
