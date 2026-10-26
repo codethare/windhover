@@ -21,6 +21,11 @@ Three modes, one binary, no daemon:
 Grid and hint hand off to normal mode for fine adjustment, so a session is one
 continuous interaction rather than three separate tools.
 
+A click is the last thing a session does: the button is injected and the session
+exits. The keyboard is held exclusively, and a layer surface cannot hand it back,
+so without the exit the compositor would take the click's focus away from the
+field it just focused, and nothing could be typed into it.
+
 ## Why compositor hotkeys
 
 Wayland does not let a client bind global hotkeys or grab the keyboard. warpd's
@@ -28,10 +33,9 @@ own manual states this and its Wayland port consequently requires one of the
 mode flags to be used, bound to a hotkey in the compositor.
 
 windhover takes the same route: a compositor keybinding launches it, it draws a
-fullscreen overlay, takes the keyboard exclusively for the lifetime of the
-overlay, moves the pointer through `zwlr_virtual_pointer_v1`, and exits. That
-means no daemon, no IPC, no cross-invocation state, no root, and no
-`/dev/uinput`.
+fullscreen overlay, takes the keyboard exclusively while the overlay is up, moves
+the pointer through `zwlr_virtual_pointer_v1`, and exits. That means no daemon,
+no IPC, no cross-invocation state, no root, and no `/dev/uinput`.
 
 ## Requirements
 
@@ -91,7 +95,8 @@ riverctl map normal Super+Alt C spawn windhover
 
 `Mod4+Mod1+c` is the binding warpd documents for normal mode. A session holds the
 keyboard exclusively, so a second press of that hotkey cannot reach the
-compositor while one is running — `Escape` is what gives the keyboard back.
+compositor while one is running — `Escape`, or a click, is what gives the
+keyboard back.
 
 ### One key per press instead
 

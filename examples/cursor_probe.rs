@@ -11,7 +11,8 @@
 //! movement, so a check costs about a second and a half rather than the full
 //! timeout.
 //! Keyboard interactivity stays `None` so the probe never steals the keyboard
-//! from the session being measured.
+//! from the session being measured, and every keyboard focus it is given is
+//! reported: a click has to leave the surface it landed on focused.
 //!
 //! Test infrastructure only — it is not part of the shipped binary.
 //!
@@ -19,6 +20,12 @@
 //! reaches it if the session really did take its overlay down first. With
 //! `--fill RRGGBB` it paints the output that colour, which is how the overlay is
 //! looked at over a light background without needing a light application.
+//!
+//! With `--band HEIGHT` it is a strip at the bottom of the output instead of the
+//! whole of it, and `--keyboard on-demand` is what a panel like `aside` asks for:
+//! the compositor focuses it on hover or on a click, never exclusively. The two
+//! together are the reproduction of "a click into a panel's text field is not
+//! typable", which no other shape of probe shows.
 //!
 //! With `--toplevel` the probe is an ordinary fullscreen xdg-shell window rather
 //! than a layer surface. Layer surfaces live in the overlay stack, so a click
@@ -28,7 +35,8 @@
 //! ```sh
 //! cargo run --example cursor_probe -- --timeout 2000
 //! # prints "<x> <y> <width> <height>" in logical pixels
-//! # and, on a second line, "<button> <x> <y>" for the first click received
+//! # then a "<button> <x> <y>" line for every click received
+//! # and `keyboard enter` / `keyboard leave` in the order they arrived
 //! # exits 1 if no pointer position was reported
 //! ```
 
@@ -39,7 +47,8 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{memfd_create, ftruncate, MemfdFlags};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -61,7 +70,27 @@ struct State {
     /// Size asked for by `xdg_toplevel::Configure`, in logical pixels. Only used
     /// in `--toplevel` mode.
     toplevel_size: Option<(u32, u32)>,
+    /// Every `wl_keyboard::Enter` and `Leave`, in order. A panel that never
+    /// enters never gets the keyboard, whatever a click delivered to it.
+    keyboard_focus: Vec<&'static str>,
     closed: bool,
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Enter { .. } => state.keyboard_focus.push("enter"),
+            wl_keyboard::Event::Leave { .. } => state.keyboard_focus.push("leave"),
+            _ => {}
+        }
+    }
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
@@ -118,6 +147,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             if let wayland_client::WEnum::Value(capabilities) = capabilities {
                 if capabilities.contains(wl_seat::Capability::Pointer) {
                     seat.get_pointer(qh, ());
+                }
+                if capabilities.contains(wl_seat::Capability::Keyboard) {
+                    // Kept alive by the seat's own refcount while the probe runs;
+                    // only the focus changes are interesting here.
+                    let _ = seat.get_keyboard(qh, ());
                 }
             }
         }
@@ -224,6 +258,12 @@ fn main() {
     let mut settle = Duration::from_millis(400);
     let mut fill: Option<(u8, u8, u8)> = None;
     let mut toplevel = false;
+    // `on-demand` is what a panel like aside asks for: the compositor focuses it
+    // on hover or on a click, and never exclusively.
+    let mut keyboard = zwlr_layer_surface_v1::KeyboardInteractivity::None;
+    // A bottom band rather than the whole output, so the pointer can start
+    // outside it and be moved onto it, the way it is moved onto a panel.
+    let mut band: Option<u32> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -251,6 +291,14 @@ fn main() {
                 }
             }
             "--toplevel" => toplevel = true,
+            "--keyboard" => {
+                keyboard = match args.next().as_deref() {
+                    Some("on-demand") => zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+                    Some("none") => zwlr_layer_surface_v1::KeyboardInteractivity::None,
+                    other => panic!("unknown keyboard interactivity `{other:?}`"),
+                }
+            }
+            "--band" => band = Some(value() as u32),
             other => panic!("unknown option `{other}`"),
         }
     }
@@ -301,15 +349,27 @@ fn main() {
         &qh,
         (),
     );
-    layer_surface.set_size(0, 0);
-    layer_surface.set_anchor(
-        zwlr_layer_surface_v1::Anchor::Top
-            | zwlr_layer_surface_v1::Anchor::Bottom
-            | zwlr_layer_surface_v1::Anchor::Left
-            | zwlr_layer_surface_v1::Anchor::Right,
-    );
+    match band {
+        Some(height) => {
+            layer_surface.set_size(0, height);
+            layer_surface.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Bottom
+                    | zwlr_layer_surface_v1::Anchor::Left
+                    | zwlr_layer_surface_v1::Anchor::Right,
+            );
+        }
+        None => {
+            layer_surface.set_size(0, 0);
+            layer_surface.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Top
+                    | zwlr_layer_surface_v1::Anchor::Bottom
+                    | zwlr_layer_surface_v1::Anchor::Left
+                    | zwlr_layer_surface_v1::Anchor::Right,
+            );
+        }
+    }
     layer_surface.set_exclusive_zone(-1);
-    layer_surface.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
+    layer_surface.set_keyboard_interactivity(keyboard);
     surface.commit();
 
     for _ in 0..16 {
@@ -426,6 +486,9 @@ fn run_probe(
             }
             if let Some((axis, value)) = state.axis {
                 println!("axis {axis} {value}");
+            }
+            for change in &state.keyboard_focus {
+                println!("keyboard {change}");
             }
         }
         None => {

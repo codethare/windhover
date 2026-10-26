@@ -115,11 +115,11 @@ is what lets the shift level of a movement key jump to an edge.
 | `edge_left` `edge_middle` `edge_right` | `H` `M` `L` | Jump to the left edge, the middle, the right edge |
 | `speed_fine` `speed_normal` `speed_coarse` | `[` `\` `]` | Scale every later move and scroll by 0.1, 1 or 4 |
 | `scroll_up` `scroll_down` | `u` `d` | Wheel |
-| `button_left` `button_middle` `button_right` | `m` `,` `.` | Click |
+| `button_left` `button_middle` `button_right` | `m` `,` `.` | Click, and end the session |
 | `drag` | `v` | Hold the left button, or release it |
 | `grid_mode` `hint_mode` | `g` `f` | Enter grid or hint mode |
 | `grid_left` `grid_right` `grid_up` `grid_down` | `h` `l` `k` `j` | Pan the grid region by its own size |
-| `grid_back` `grid_warp` `grid_warp_click` | `BackSpace` `Return` `space` | Undo a shrink, warp, warp and click |
+| `grid_back` `grid_warp` `grid_warp_click` | `BackSpace` `Return` `space` | Undo a shrink, warp, warp and click (ending the session) |
 | `hint_back` | `BackSpace` | Delete a typed label character, or leave hint mode |
 
 ### Values
@@ -132,7 +132,7 @@ is what lets the shift level of a movement key jump to an edge.
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |
 | `hint_cell` | derived so the output is filled with `len(hint_charset)²` cells | Wanted spacing between hint cells, in logical pixels. No axis ever gets more cells than the alphabet has characters, so a label is one character where there is spare room in the two-character budget and two everywhere else |
 | `hint_charset` | `asdfjkl;ghqwertyuiop` | Label alphabet, printable ASCII. Labels are all the same length, so the length grows rather than letting one label prefix another |
-| `click_after_warp` | `false` | Click when a hint is selected |
+| `click_after_warp` | `false` | Click when a hint is selected, ending the session |
 | `font_family` | `sans-serif` | Resolved through `fc-match`, with a built-in path list as a fallback |
 | `accent` `text` `panel` | macOS dark palette | `RRGGBB` or `RRGGBBAA`, with or without a leading `#` |
 

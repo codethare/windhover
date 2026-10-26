@@ -471,27 +471,43 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
-echo "check: every mouse button works from normal mode"
+echo "check: every mouse button works from normal mode, and ends the session"
 # The click-through check above uses grid mode's warp-and-click, so the three
 # normal-mode button keys need their own check: 272 is BTN_LEFT, 273 BTN_RIGHT
-# and 274 BTN_MIDDLE.
-session_start --normal
-if session_alive; then
-  probe_start "--layer bottom"
-  inject "tap:l tap:m tap:comma tap:period"
-  probe_wait
-  BUTTONS=$(grep '^click ' "$RUNTIME/probe.out" | cut -d' ' -f2 | tr '\n' ' ')
-  if [ "$BUTTONS" = "272 274 273 " ]; then
-    pass "m, , and . sent BTN_LEFT, BTN_MIDDLE and BTN_RIGHT"
-  else
-    fail "the button keys sent '$BUTTONS', expected '272 274 273 ' (probe output: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
+# and 274 BTN_MIDDLE. A click is the last thing a session does, so each button
+# needs a session of its own, and each one has to leave nothing running.
+button_check() {
+  KEY=$1
+  EXPECT=$2
+  session_start --normal
+  if ! session_alive; then
+    fail "$KEY: session did not start: $(cat "$RUNTIME/session.out")"
+    return
   fi
-  inject "tap:Escape"
+  # The probe is on the bottom layer and has to be moved onto before it reports
+  # anything: a surface mapped under a stationary pointer is not re-focused.
+  probe_start "--layer bottom"
+  inject "tap:l tap:$KEY"
+  probe_wait
+  BUTTON=$(grep '^click ' "$RUNTIME/probe.out" | head -1 | cut -d' ' -f2)
   sleep 0.4
-  session_alive && kill "$SESSION_PID" 2>/dev/null || true
-else
-  fail "session did not start: $(cat "$RUNTIME/session.out")"
-fi
+  if [ "$BUTTON" != "$EXPECT" ]; then
+    fail "$KEY sent '$BUTTON', expected $EXPECT (probe output: $(cat "$RUNTIME/probe.out" | tr '\n' '|'))"
+  elif session_alive; then
+    fail "$KEY: the session kept running after the click"
+    kill "$SESSION_PID" 2>/dev/null || true
+  else
+    STATUS=$(session_status)
+    if [ "$STATUS" = "0" ] && [ ! -s "$RUNTIME/session.out" ]; then
+      pass "$KEY sent button $EXPECT and ended the session"
+    else
+      fail "$KEY: the click ended the session with status $STATUS: $(cat "$RUNTIME/session.out")"
+    fi
+  fi
+}
+button_check m 272
+button_check comma 274
+button_check period 273
 
 echo "check: hovering reaches what is under the overlay"
 # An application only sees the pointer move if the overlay does not take pointer
@@ -521,9 +537,12 @@ else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
-echo "check: a click reaches an ordinary window, not only a layer surface"
+echo "check: a click reaches an ordinary window, and leaves it focused"
 # A real xdg-shell toplevel. Layer surfaces live in the overlay stack, so the
-# check above is not evidence that a click reaches an application window.
+# check above is not evidence that a click reaches an application window. The
+# keyboard is held exclusively for the life of the session, so what the click has
+# to leave behind is the focus it just gave: without that, a text field the click
+# focused is unfocused again before a key can reach it.
 session_start --normal
 if session_alive; then
   "$PROBE" --toplevel --min-lifetime 2500 --settle 900 >"$RUNTIME/toplevel.out" 2>&1 &
@@ -536,14 +555,17 @@ if session_alive; then
   # window is a tiled column rather than the whole output.
   inject "mods:shift tap:h mods: tap:l tap:l tap:l tap:j tap:j tap:m"
   wait "$TOPLEVEL_PID" 2>/dev/null || true
-  if grep -q '^click 272 ' "$RUNTIME/toplevel.out"; then
-    pass "the left click reached the window"
-  else
+  LAST_FOCUS=$(grep '^keyboard ' "$RUNTIME/toplevel.out" | tail -1)
+  if ! grep -q '^click 272 ' "$RUNTIME/toplevel.out"; then
     fail "the left click did not reach the window (probe output: $(cat "$RUNTIME/toplevel.out" | tr '\n' '|'))"
+  elif session_alive; then
+    fail "the session was still running after the click"
+    kill "$SESSION_PID" 2>/dev/null || true
+  elif [ "$LAST_FOCUS" != "keyboard enter" ]; then
+    fail "the window was left without the keyboard (last focus: '${LAST_FOCUS:-none}')"
+  else
+    pass "the left click reached the window and left it with the keyboard"
   fi
-  inject "tap:Escape"
-  sleep 0.4
-  session_alive && kill "$SESSION_PID" 2>/dev/null || true
 else
   fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi

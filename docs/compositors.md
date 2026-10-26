@@ -64,6 +64,12 @@ These came out of the runs above; they are worth knowing before filing a bug.
   compositor's own key handling, not on the injected one. This is an artefact of
   driving the session through a virtual keyboard in the tests, not something a
   real user hits.
+- An **on-demand** layer surface takes the keyboard as soon as the pointer enters
+  it, where niri waits for a click. So on sway, moving onto a panel that asks for
+  on-demand keyboard focus ends the session at that moment, before any click is
+  injected: the session lost the keyboard, which is its own exit condition. The
+  panel has the keyboard, so typing into it works either way — the click is only
+  what niri needs.
 
 ### river
 
@@ -77,9 +83,10 @@ These came out of the runs above; they are worth knowing before filing a bug.
 The headless runs above cover the protocol behaviour. Two things can only be
 checked with a screen, a real keyboard and windows on it:
 
-- whether a click reaches the application under the overlay — the suite verifies
-  the button arrives at a surface *below* the overlay on the bottom layer, which
-  is the same mechanism, but a real application's opinion is worth having;
+- whether a click reaches the application under the overlay and leaves it with
+  the keyboard — the suite verifies the button arrives at a surface *below* the
+  overlay and that the window it landed on is still focused afterwards, which is
+  the same mechanism, but a real application's opinion is worth having;
 - how the overlay looks over real content. `scripts/capture.sh` renders one
   frame per mode to PNG against a headless compositor, which is enough to catch
   layout and colour mistakes but not to judge them.

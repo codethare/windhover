@@ -380,14 +380,26 @@ impl Session {
     /// do. Every effect the session produces passes through here, so a one-shot
     /// session ends wherever its mode hands over.
     fn finish(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
-        let effects = self.end_at_handover(effects);
+        let mut effects = self.end_at_handover(effects);
+        // The keyboard is held exclusively, and a layer surface cannot hand it
+        // back: a compositor returns it to this session the moment the click
+        // gives it to the application, which leaves a text field unfocused. So
+        // the click is the session's last act — injecting it and exiting is what
+        // lets the application keep the focus the click just gave it.
+        if effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Click { .. }))
+            && !effects.contains(&Effect::Exit)
+        {
+            effects.push(Effect::Exit);
+        }
         self.apply(&effects);
         effects
     }
 
-    /// With `--oneshot`, the hand-over that would return to normal mode is the
-    /// end of the session. Grid and hint both hand over through the same
-    /// effect, and normal mode never emits it.
+    /// With `--oneshot`, the hand-over that ends grid or hint mode ends the
+    /// session instead of returning to normal mode. Grid and hint both hand over
+    /// through the same effect, and normal mode never emits it.
     fn end_at_handover(&self, effects: Vec<Effect>) -> Vec<Effect> {
         if !self.oneshot {
             return effects;
@@ -864,6 +876,43 @@ mod tests {
         let effects = press(&mut session, "Return");
         assert_eq!(session.mode(), Mode::Normal);
         assert!(effects.contains(&Effect::Switch(Mode::Normal)));
+    }
+
+    #[test]
+    fn a_click_is_the_last_thing_a_session_does() {
+        // The keyboard is held exclusively, so a click that focuses an
+        // application ends the session: anything injected after it would leave
+        // the field the click just focused unfocused again.
+        let mut session = session();
+        assert_eq!(
+            press(&mut session, "m"),
+            vec![Effect::Click { button: BTN_LEFT }, Effect::Exit]
+        );
+    }
+
+    #[test]
+    fn a_grid_warp_and_click_still_hands_over_before_ending() {
+        let mut session = session();
+        press(&mut session, "g");
+        press(&mut session, "w");
+        let effects = press(&mut session, "space");
+        assert!(matches!(effects[0], Effect::Warp { .. }), "{effects:?}");
+        assert_eq!(effects[1], Effect::Click { button: BTN_LEFT });
+        // The hand-over still happens, so the exit is the session's own and not
+        // the one-shot's.
+        assert_eq!(effects[2], Effect::Switch(Mode::Normal));
+        assert_eq!(effects[3], Effect::Exit);
+    }
+
+    #[test]
+    fn a_one_shot_click_exits_once() {
+        let mut session = one_shot_session();
+        let effects = press(&mut session, "m");
+        assert_eq!(
+            effects.iter().filter(|e| **e == Effect::Exit).count(),
+            1,
+            "{effects:?}"
+        );
     }
 
     #[test]
