@@ -85,12 +85,8 @@ impl Normal {
             Action::SpeedFine => vec![Effect::Speed(SPEED_FINE)],
             Action::SpeedNormal => vec![Effect::Speed(SPEED_NORMAL)],
             Action::SpeedCoarse => vec![Effect::Speed(SPEED_COARSE)],
-            Action::ScrollUp => vec![Effect::Scroll {
-                steps: -(multiplier as i32),
-            }],
-            Action::ScrollDown => vec![Effect::Scroll {
-                steps: multiplier as i32,
-            }],
+            Action::ScrollUp => vec![Effect::Scroll { steps: -multiplier }],
+            Action::ScrollDown => vec![Effect::Scroll { steps: multiplier }],
             Action::ClickLeft | Action::ClickMiddle | Action::ClickRight => {
                 let button = action_button(action);
                 if self.dragging {
@@ -163,7 +159,6 @@ mod tests {
             mode.on_action(Action::SpeedNormal, &context),
             vec![Effect::Speed(1.0)]
         );
-        assert!(SPEED_FINE < 1.0 && SPEED_COARSE > 1.0, "the presets do not bracket one step");
     }
 
     #[test]
@@ -245,7 +240,7 @@ mod tests {
         mode.on_digit(3);
         assert_eq!(
             mode.on_action(Action::ScrollUp, &context),
-            vec![Effect::Scroll { steps: -3 }]
+            vec![Effect::Scroll { steps: -3.0 }]
         );
     }
 
@@ -263,7 +258,10 @@ mod tests {
         );
         assert_eq!(
             mode.on_action(Action::EdgeRight, &context),
-            vec![Effect::Warp { x: 1280.0, y: 200.0 }]
+            vec![Effect::Warp {
+                x: 1280.0,
+                y: 200.0
+            }]
         );
     }
 

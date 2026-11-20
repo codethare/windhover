@@ -5,8 +5,8 @@ use std::io::{Read, Seek};
 use std::os::fd::OwnedFd;
 
 use wayland_client::{
-    protocol::{wl_keyboard, wl_pointer, wl_seat},
     Dispatch, WEnum,
+    protocol::{wl_keyboard, wl_pointer, wl_seat},
 };
 use xkbcommon::xkb;
 
@@ -17,6 +17,48 @@ use crate::trace;
 /// code, which sits eight above it. Resolving an evdev code directly reads the
 /// wrong key, and every code below 9 reads no key at all.
 const XKB_KEYCODE_OFFSET: u32 = 8;
+
+/// Resolve a key the way a shortcut wants it: Lock is ignored so Caps Lock does
+/// not change which binding is reached, while Shift and the other modifiers
+/// still select the level they normally do. The state is restored before it is
+/// used for anything else, so repeat detection and Control still see the real
+/// modifier state.
+fn shortcut_keysym(
+    state: &mut xkb::State,
+    lock_mask: xkb::ModMask,
+    key: xkb::Keycode,
+) -> xkb::Keysym {
+    if lock_mask == 0 {
+        return state.key_get_one_sym(key);
+    }
+    let depressed = state.serialize_mods(xkb::STATE_MODS_DEPRESSED);
+    let latched = state.serialize_mods(xkb::STATE_MODS_LATCHED);
+    let locked = state.serialize_mods(xkb::STATE_MODS_LOCKED);
+    if depressed & lock_mask == 0 && latched & lock_mask == 0 && locked & lock_mask == 0 {
+        return state.key_get_one_sym(key);
+    }
+    let depressed_layout = state.serialize_layout(xkb::STATE_LAYOUT_DEPRESSED);
+    let latched_layout = state.serialize_layout(xkb::STATE_LAYOUT_LATCHED);
+    let locked_layout = state.serialize_layout(xkb::STATE_LAYOUT_LOCKED);
+    state.update_mask(
+        depressed & !lock_mask,
+        latched & !lock_mask,
+        locked & !lock_mask,
+        depressed_layout,
+        latched_layout,
+        locked_layout,
+    );
+    let keysym = state.key_get_one_sym(key);
+    state.update_mask(
+        depressed,
+        latched,
+        locked,
+        depressed_layout,
+        latched_layout,
+        locked_layout,
+    );
+    keysym
+}
 
 /// The modifier that scales a movement. The keysym cannot show it: a modifier
 /// does not change which symbol a letter resolves to.
@@ -51,12 +93,29 @@ pub struct Keyboard {
     /// Set when a keymap is installed, and consumed by the session: that is the
     /// point at which the configured bindings can be checked against the layout.
     keymap_loaded: bool,
+    /// The Lock modifier's bit, or 0 when this keymap has none. Shortcuts are
+    /// resolved with it cleared: Caps Lock must not turn `h` into `H`.
+    lock_mask: xkb::ModMask,
+    /// Why the last keymap could not be installed, for the startup check. A
+    /// keyboard with no keymap receives events that cannot be resolved, so the
+    /// session would run with no key able to reach it.
+    keymap_error: Option<String>,
     events: Vec<KeyEvent>,
 }
 
 impl Keyboard {
     pub fn drain(&mut self) -> Vec<KeyEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Whether keys can be resolved at all.
+    pub fn keymap_ready(&self) -> bool {
+        self.state.is_some()
+    }
+
+    /// The reason the keyboard has no usable keymap, if one was reported.
+    pub fn keymap_error(&self) -> Option<&str> {
+        self.keymap_error.as_deref()
     }
 
     /// Whether the session has the keyboard, reported once per change.
@@ -94,13 +153,10 @@ impl Keyboard {
         reachable
     }
 
-    fn load_keymap(
-        &mut self,
-        format: WEnum<wl_keyboard::KeymapFormat>,
-        fd: OwnedFd,
-        size: u32,
-    ) {
+    fn load_keymap(&mut self, format: WEnum<wl_keyboard::KeymapFormat>, fd: OwnedFd, size: u32) {
         if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
+            self.keymap_error =
+                Some("the compositor sent a keymap in a format other than XkbV1".to_string());
             return;
         }
         let mut file = std::fs::File::from(fd);
@@ -111,6 +167,7 @@ impl Keyboard {
         if file.read_exact(&mut buffer).is_err() {
             buffer.clear();
             if file.read_to_end(&mut buffer).is_err() {
+                self.keymap_error = Some("the compositor's keymap could not be read".to_string());
                 return;
             }
         }
@@ -130,6 +187,8 @@ impl Keyboard {
             xkb::KEYMAP_FORMAT_TEXT_V1,
             xkb::KEYMAP_COMPILE_NO_FLAGS,
         ) else {
+            self.keymap_error =
+                Some("the compositor sent an xkb keymap that could not be parsed".to_string());
             eprintln!("windhover: compositor sent an xkb keymap that could not be parsed");
             return;
         };
@@ -138,6 +197,13 @@ impl Keyboard {
             keymap.min_keycode().raw(),
             keymap.max_keycode().raw()
         ));
+        let lock = keymap.mod_get_index("Lock");
+        self.lock_mask = if lock == xkb::MOD_INVALID || lock >= 32 {
+            0
+        } else {
+            1 << lock
+        };
+        self.keymap_error = None;
         self.state = Some(xkb::State::new(&keymap));
         self.keymap = Some(keymap);
         self.keymap_loaded = true;
@@ -145,11 +211,12 @@ impl Keyboard {
 
     fn handle(&mut self, event: wl_keyboard::Event) {
         match event {
-            wl_keyboard::Event::Keymap { format, fd, size } => {
-                self.load_keymap(format, fd, size)
-            }
+            wl_keyboard::Event::Keymap { format, fd, size } => self.load_keymap(format, fd, size),
             wl_keyboard::Event::Enter { keys, .. } => {
-                trace::log(format_args!("focus enter, {} keys already down", keys.len()));
+                trace::log(format_args!(
+                    "focus enter, {} keys already down",
+                    keys.len()
+                ));
                 if !self.focused {
                     self.focused = true;
                     self.focus_change = Some(true);
@@ -166,7 +233,6 @@ impl Keyboard {
                 self.down.clear();
             }
             wl_keyboard::Event::Key { key, state, .. } => {
-                let key = u32::from(key);
                 let pressed = match state {
                     WEnum::Value(wl_keyboard::KeyState::Pressed) => true,
                     WEnum::Value(wl_keyboard::KeyState::Released) => false,
@@ -179,9 +245,12 @@ impl Keyboard {
                 if !pressed {
                     self.down.remove(&key);
                 }
-                if let Some(xkb_state) = &self.state {
-                    let keysym =
-                        xkb_state.key_get_one_sym(xkb::Keycode::new(key + XKB_KEYCODE_OFFSET));
+                if let Some(xkb_state) = &mut self.state {
+                    let keysym = shortcut_keysym(
+                        xkb_state,
+                        self.lock_mask,
+                        xkb::Keycode::new(key + XKB_KEYCODE_OFFSET),
+                    );
                     let fast =
                         xkb_state.mod_name_is_active(FAST_MODIFIER, xkb::STATE_MODS_EFFECTIVE);
                     trace::log(format_args!(
@@ -236,7 +305,6 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         }
         if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
             state.pointer = Some(seat.get_pointer(qh, ()));
-            state.pointer_ready = true;
         }
     }
 }
@@ -266,8 +334,16 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         match event {
             // Surface-local coordinates, which for our fullscreen overlay are
             // already the logical coordinates the modes work in.
-            wl_pointer::Event::Enter { surface_x, surface_y, .. }
-            | wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            }
+            | wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
                 state.pointer_pos = Some((surface_x, surface_y));
             }
             _ => {}
@@ -288,10 +364,13 @@ mod tests {
         "  xkb_keycodes \"t\" { minimum = 8; maximum = 255; <ESC> = 9; <AD11> = 35; \
          <AC06> = 43; };\n",
         "  xkb_types \"t\" { type \"ONE_LEVEL\" { modifiers = None; map[None] = Level1; \
-         level_name[Level1] = \"Any\"; }; };\n",
+         level_name[Level1] = \"Any\"; }; \
+         type \"ALPHABETIC\" { modifiers = Shift+Lock; map[Shift] = Level2; \
+         map[Lock] = Level2; map[Shift+Lock] = Level1; level_name[Level1] = \"Base\"; \
+         level_name[Level2] = \"Caps\"; }; };\n",
         "  xkb_compat \"t\" { };\n",
         "  xkb_symbols \"t\" { key <ESC> { [ Escape ] }; key <AD11> { [ bracketright ] }; \
-         key <AC06> { [ h ] }; };\n",
+         key <AC06> { type[Group1] = \"ALPHABETIC\", [ h, H ] }; };\n",
         "};\n"
     );
 
@@ -325,8 +404,14 @@ mod tests {
     fn the_reachable_keysyms_are_the_ones_the_keymap_defines() {
         let keyboard = keyboard();
         let reachable = keyboard.reachable_keysyms();
-        assert!(reachable.contains(&parse_key("Escape").unwrap()), "{reachable:?}");
-        assert!(reachable.contains(&parse_key("h").unwrap()), "{reachable:?}");
+        assert!(
+            reachable.contains(&parse_key("Escape").unwrap()),
+            "{reachable:?}"
+        );
+        assert!(
+            reachable.contains(&parse_key("h").unwrap()),
+            "{reachable:?}"
+        );
         // Defined as a keycode, but this keymap gives it no symbol.
         assert!(
             !reachable.contains(&parse_key("j").unwrap()),
@@ -339,6 +424,38 @@ mod tests {
         let mut keyboard = keyboard();
         assert!(keyboard.take_keymap_loaded());
         assert!(!keyboard.take_keymap_loaded());
+    }
+
+    fn feed_keymap(keyboard: &mut Keyboard, format: wl_keyboard::KeymapFormat, text: &[u8]) {
+        let fd = rustix::fs::memfd_create("keymap", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        rustix::io::write(&fd, text).unwrap();
+        keyboard.load_keymap(WEnum::Value(format), fd, text.len() as u32);
+    }
+
+    #[test]
+    fn a_keymap_that_cannot_be_parsed_is_reported() {
+        let mut keyboard = Keyboard::default();
+        feed_keymap(
+            &mut keyboard,
+            wl_keyboard::KeymapFormat::XkbV1,
+            b"this is not an xkb keymap",
+        );
+        assert!(!keyboard.keymap_ready());
+        assert!(keyboard.keymap_error().is_some());
+    }
+
+    #[test]
+    fn a_non_xkb_keymap_is_reported() {
+        let mut keyboard = Keyboard::default();
+        feed_keymap(&mut keyboard, wl_keyboard::KeymapFormat::NoKeymap, b"");
+        assert!(!keyboard.keymap_ready());
+        assert!(
+            keyboard
+                .keymap_error()
+                .is_some_and(|reason| reason.contains("XkbV1")),
+            "{:?}",
+            keyboard.keymap_error()
+        );
     }
 
     #[test]
@@ -359,6 +476,54 @@ mod tests {
                 pressed: true,
                 fast: false,
             }]
+        );
+    }
+
+    fn set_modifiers(keyboard: &mut Keyboard, depressed: u32, locked: u32) {
+        keyboard.handle(wl_keyboard::Event::Modifiers {
+            serial: 0,
+            mods_depressed: depressed,
+            mods_latched: 0,
+            mods_locked: locked,
+            group: 0,
+        });
+    }
+
+    fn release(keyboard: &mut Keyboard, evdev: u32) {
+        keyboard.handle(wl_keyboard::Event::Key {
+            serial: 0,
+            time: 0,
+            key: evdev,
+            state: WEnum::Value(wl_keyboard::KeyState::Released),
+        });
+        keyboard.drain();
+    }
+
+    #[test]
+    fn caps_lock_does_not_change_which_shortcut_a_key_reaches() {
+        let mut keyboard = keyboard();
+        let lock = keyboard.lock_mask;
+        assert_ne!(lock, 0, "the test keymap has a Lock modifier");
+
+        set_modifiers(&mut keyboard, 0, lock);
+        assert_eq!(
+            press(&mut keyboard, 35)[0].keysym,
+            parse_key("h").unwrap(),
+            "Caps Lock turned h into H"
+        );
+        release(&mut keyboard, 35);
+
+        let shift_index = keyboard
+            .keymap
+            .as_ref()
+            .expect("keymap")
+            .mod_get_index("Shift");
+        assert!(shift_index < 32, "the test keymap has a Shift modifier");
+        set_modifiers(&mut keyboard, 1 << shift_index, lock);
+        assert_eq!(
+            press(&mut keyboard, 35)[0].keysym,
+            parse_key("H").unwrap(),
+            "Shift with Caps Lock must still select the shifted level"
         );
     }
 }

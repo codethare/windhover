@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       # xkbcommon and wayland-sys probe these with pkg-config.
       - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
   e2e:

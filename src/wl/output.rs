@@ -1,8 +1,8 @@
 //! Output discovery, logical geometry, and scale.
 
 use wayland_client::{
-    protocol::wl_output::{self, WlOutput},
     Dispatch,
+    protocol::wl_output::{self, WlOutput},
 };
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 

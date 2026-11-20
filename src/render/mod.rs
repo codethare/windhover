@@ -31,6 +31,8 @@ pub struct Frame<'a> {
     pub speed: f64,
     /// The label type size for this output, in logical pixels.
     pub label_size: f32,
+    /// The status type size for this output, in logical pixels.
+    pub status_size: f32,
     pub grid: Option<GridFrame<'a>>,
     pub hint: Option<HintFrame<'a>>,
 }
@@ -56,6 +58,7 @@ impl<'a> Frame<'a> {
             dragging: false,
             speed: 1.0,
             label_size: 14.0,
+            status_size: 13.0,
             grid: None,
             hint: None,
         }
@@ -71,13 +74,29 @@ pub fn draw(
 ) {
     // An overlay that dims the screen would defeat hint mode's purpose: the
     // user has to be able to read what is underneath.
-    canvas.clear(Rgba::rgba(0, 0, 0, 0));
+    canvas.clear(Rgba::rgba8(0, 0, 0, 0));
 
     if let Some(grid) = &frame.grid {
-        draw_grid(canvas, theme, fonts, badges, frame.scale, frame.label_size, grid);
+        draw_grid(
+            canvas,
+            theme,
+            fonts,
+            badges,
+            frame.scale,
+            frame.label_size,
+            grid,
+        );
     }
     if let Some(hint) = &frame.hint {
-        draw_hint(canvas, theme, fonts, badges, frame.scale, frame.label_size, hint);
+        draw_hint(
+            canvas,
+            theme,
+            fonts,
+            badges,
+            frame.scale,
+            frame.label_size,
+            hint,
+        );
     }
 
     draw_cursor(canvas, theme, frame.scale, frame.cursor);
@@ -130,7 +149,17 @@ fn draw_grid(
             break;
         };
         let (x, y) = cell.center();
-        badge(canvas, theme, fonts, badges, (x as f32, y as f32), label, 0, scale, size);
+        badge(
+            canvas,
+            theme,
+            fonts,
+            badges,
+            (x as f32, y as f32),
+            label,
+            0,
+            scale,
+            size,
+        );
     }
 }
 
@@ -161,9 +190,6 @@ fn draw_hint(
         }
     }
 
-    let width = canvas.width() as f32;
-    let height = canvas.height() as f32;
-    let _ = (width, height);
     for x in &view.lines.0 {
         canvas.vline(*x as f32 * scale, theme.hairline * scale, theme.hint_line());
     }
@@ -281,10 +307,7 @@ fn rasterize(
     let padding = (theme.badge_padding_x, theme.badge_padding_y);
     let width = (text_width + padding.0 * 2.0) * scale;
     let height = (ascent + descent + padding.1 * 2.0) * scale;
-    let (w, h) = (
-        (width.ceil() as u32).max(1),
-        (height.ceil() as u32).max(1),
-    );
+    let (w, h) = ((width.ceil() as u32).max(1), (height.ceil() as u32).max(1));
     let mut pixmap = Pixmap::new(w, h).expect("a label box is never empty");
     {
         let mut canvas = Canvas::new(pixmap.data_mut(), w, h).expect("the box fits its own pixmap");
@@ -322,7 +345,14 @@ fn rasterize(
                 theme.text,
             );
         } else {
-            fonts.draw(&mut canvas, label, text_left, baseline, size * scale, theme.text);
+            fonts.draw(
+                &mut canvas,
+                label,
+                text_left,
+                baseline,
+                size * scale,
+                theme.text,
+            );
         }
     }
     Cached {
@@ -333,6 +363,7 @@ fn rasterize(
 
 /// A label in a translucent rounded panel, from the cache when it has been drawn
 /// before. Used by both grid and hint mode so the two cannot drift apart.
+#[allow(clippy::too_many_arguments)]
 fn badge(
     canvas: &mut Canvas,
     theme: &Theme,
@@ -399,14 +430,23 @@ fn draw_status(canvas: &mut Canvas, theme: &Theme, fonts: &mut Option<Fonts>, fr
         return;
     };
     let scale = frame.scale;
-    let size = theme.status_font_size;
+    let size = frame.status_size;
     let (ascent, descent) = fonts.ascent_descent(size);
     let width = (fonts.measure(&text, size) + theme.badge_padding_x * 2.0) * scale;
     let height = (ascent + descent + theme.badge_padding_y * 2.0) * scale;
     let x = (frame.cursor.0 as f32 * scale + 16.0 * scale).min(canvas.width() as f32 - width - 8.0);
-    let y = (frame.cursor.1 as f32 * scale + 16.0 * scale).min(canvas.height() as f32 - height - 8.0);
+    let y =
+        (frame.cursor.1 as f32 * scale + 16.0 * scale).min(canvas.height() as f32 - height - 8.0);
 
-    canvas.soft_shadow(x, y, width, height, theme.corner_radius * scale, 4.0 * scale, theme.shadow);
+    canvas.soft_shadow(
+        x,
+        y,
+        width,
+        height,
+        theme.corner_radius * scale,
+        4.0 * scale,
+        theme.shadow,
+    );
     canvas.panel_with_edge(
         x,
         y,
@@ -419,20 +459,12 @@ fn draw_status(canvas: &mut Canvas, theme: &Theme, fonts: &mut Option<Fonts>, fr
     );
     let baseline = y + theme.badge_padding_y * scale + ascent * scale;
     let centre = x + width / 2.0;
-    fonts.draw_centred(
-        canvas,
-        &text,
-        centre,
-        baseline,
-        size * scale,
-        theme.text,
-    );
+    fonts.draw_centred(canvas, &text, centre, baseline, size * scale, theme.text);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hint::lattice::Cell;
     use crate::mode::grid::Grid;
     use crate::mode::hint::Hint;
 
@@ -473,7 +505,7 @@ mod tests {
     fn the_theme_documentation_example_draws_something() {
         let mut bytes = buffer(200, 60);
         let mut canvas = Canvas::new(&mut bytes, 200, 60).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         draw_bar(&mut canvas, &Theme::default(), 1.0, (10.0, 10.0));
         // The panel is translucent, so the interior is its alpha, not opaque.
         let (x, y) = inside_the_bar((10.0, 10.0), 1.0);
@@ -489,7 +521,7 @@ mod tests {
         bytes.fill(0xAA);
         {
             let mut canvas = Canvas::new(&mut bytes, 200, 200).unwrap();
-            canvas.clear(Rgba::rgba(0, 0, 0, 0));
+            canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         }
         assert!(bytes.iter().all(|byte| *byte == 0), "the clear left pixels");
 
@@ -513,21 +545,27 @@ mod tests {
             grid: &grid,
             cell_labels: &labels,
         });
-        draw(&mut canvas, &theme, &mut fonts, &mut Badges::default(), &frame);
+        draw(
+            &mut canvas,
+            &theme,
+            &mut fonts,
+            &mut Badges::default(),
+            &frame,
+        );
 
         // The region edge, the interior lines, and a badge at a cell centre.
         // Thresholds rather than exact values: everything is antialiased.
         assert!(alpha_at(&bytes, 1280, 640, 2) > 100, "no region edge");
         assert!(alpha_at(&bytes, 1280, 640, 360) > 100, "no interior line");
-        assert!(alpha_at(&bytes, 1280, 320, 180) > 200, "no badge in the cell");
+        assert!(
+            alpha_at(&bytes, 1280, 320, 180) > 200,
+            "no badge in the cell"
+        );
         // And nothing between the marks.
         assert_eq!(alpha_at(&bytes, 1280, 100, 100), 0, "the region was filled");
     }
 
-    fn hint_frame<'a>(
-        hint: &'a Hint,
-        lines: &'a (Vec<f64>, Vec<f64>),
-    ) -> Frame<'a> {
+    fn hint_frame<'a>(hint: &'a Hint, lines: &'a (Vec<f64>, Vec<f64>)) -> Frame<'a> {
         let mut frame = Frame::normal(1.0, (0.0, 0.0));
         frame.hint = Some(HintFrame { hint, lines });
         frame
@@ -606,11 +644,23 @@ mod tests {
         let hint = Hint::new(lattice.cells((640, 400)), &"as".chars().collect::<Vec<_>>());
         let mut badges = Badges::default();
 
-        draw(&mut canvas, &theme, &mut fonts, &mut badges, &hint_frame(&hint, &lines));
+        draw(
+            &mut canvas,
+            &theme,
+            &mut fonts,
+            &mut badges,
+            &hint_frame(&hint, &lines),
+        );
         let first = badges.cached();
         assert!(first > 0, "no labels were cached");
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
-        draw(&mut canvas, &theme, &mut fonts, &mut badges, &hint_frame(&hint, &lines));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
+        draw(
+            &mut canvas,
+            &theme,
+            &mut fonts,
+            &mut badges,
+            &hint_frame(&hint, &lines),
+        );
         assert_eq!(badges.cached(), first, "the second frame rasterized again");
     }
 
@@ -626,7 +676,13 @@ mod tests {
             let (mut fonts, _) = Fonts::load("sans-serif");
             let mut frame = Frame::normal(1.0, (50.0, 50.0));
             frame.speed = speed;
-            draw(&mut canvas, &theme, &mut fonts, &mut Badges::default(), &frame);
+            draw(
+                &mut canvas,
+                &theme,
+                &mut fonts,
+                &mut Badges::default(),
+                &frame,
+            );
             // The status sits down and to the right of the cursor ring, which
             // never reaches past (60, 60).
             (60..200)
@@ -663,6 +719,9 @@ mod tests {
         let (x, y) = inside_the_bar((10.0, 10.0), 2.0);
         assert_eq!(alpha_at(&double, 800, x, y + 24), 0);
         // The 2x bar reaches further than the 1x one would have.
-        assert!(alpha_at(&double, 800, 159, 26) > 0, "the 2x bar is not wider");
+        assert!(
+            alpha_at(&double, 800, 159, 26) > 0,
+            "the 2x bar is not wider"
+        );
     }
 }

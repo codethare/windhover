@@ -28,6 +28,11 @@ that arrives first is refused the focus it asks for — or, on a panel that asks
 on-demand interactivity, granted and then lost again when the surface goes away.
 With the grab dropped before the press, what the click focuses keeps it.
 
+A session is scoped to one output: the one the pointer is on when it starts. The
+grid and hint lattices fill that output, and `H` `M` `L` jump to its edges. It
+does not cross into a neighbouring output; start another session there from the
+same binding.
+
 ## Why compositor hotkeys
 
 Wayland does not let a client bind global hotkeys or grab the keyboard. warpd's

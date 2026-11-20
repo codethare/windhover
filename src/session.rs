@@ -13,15 +13,15 @@ use xkbcommon::xkb;
 use crate::config::Config;
 use crate::hint::lattice::Lattice;
 use crate::keys::{Action, Keysym};
+use crate::mode::Effect;
+pub use crate::mode::Mode;
 use crate::mode::grid::Grid;
 use crate::mode::hint::Hint;
 use crate::mode::normal::{Context, Normal};
-use crate::mode::Effect;
-pub use crate::mode::Mode;
 use crate::render::{self, Canvas, Fonts, Frame, GridFrame, HintFrame};
 use crate::trace;
-use crate::wl::pointer::BTN_LEFT;
 use crate::wl::Wayland;
+use crate::wl::pointer::BTN_LEFT;
 
 /// How long a movement key has to be held before it starts repeating, and the
 /// gap between repeats after that. Repeated here rather than taken from the
@@ -41,13 +41,11 @@ const FAST_STEP: f64 = 2.0;
 /// How long a repeat may run before its key's release is taken to have been
 /// lost. A repeat is stopped by the release, so a compositor that swallows one —
 /// river does when a drag turns into a drag-and-drop — leaves the pointer
-/// travelling forever: it pins at the edge, the button stays down so the window
-/// keeps dragging, and no key reaches the session to stop any of it, because the
-/// compositor stopped delivering keys without saying so. Nothing tells that
-/// apart from a user genuinely holding a key down, so the damage is bounded
-/// instead: the step grows to four times while a key is down, so five seconds of
-/// holding covers far more ground than one press is for, and far more wheel steps
-/// than one press is for too.
+/// travelling forever and, if a drag is active, the button down. Nothing tells a
+/// lost release apart from a user genuinely holding a key down, so the damage is
+/// bounded instead: past this limit the expired holds stop repeating and a held
+/// button is released. The session stays up, because a fine-speed hold across a
+/// large output legitimately outlasts a short limit.
 const MAX_HOLD: Duration = Duration::from_secs(5);
 /// How long the seat may hold the keyboard away from a session before the
 /// session gives up. Nothing the user presses can reach it in the meantime, so
@@ -218,7 +216,7 @@ impl Session {
             let effects = self.act(action, fast, Duration::ZERO);
             // A press waits out the delay before it repeats; `tick` keeps only
             // the shorter gap from then on.
-            self.schedule(action, now, fast, now, REPEAT_DELAY);
+            self.schedule(keysym, now, fast, now, REPEAT_DELAY);
             return effects;
         }
 
@@ -272,14 +270,17 @@ impl Session {
             .any(|entry| now.saturating_duration_since(entry.pressed_at) >= MAX_HOLD)
         {
             eprintln!(
-                "windhover: a key held this long means its release never arrived; \
-                 ending the session"
+                "windhover: a key has been held past the limit; its release was probably \
+                 lost, so its repeat stops here"
             );
-            self.held.clear();
-            let mut effects = self.normal.release_drag();
-            // Ending is the only way out from here: the compositor that lost the
-            // release may also have stopped delivering the key that would quit.
-            effects.push(Effect::Exit);
+            // Only the expired holds stop. A legitimate long hold (fine speed
+            // across a large output) is also longer than the limit, and there is
+            // no way to tell the two apart; keeping the session means the common
+            // case still works. A session whose keyboard is truly gone can be
+            // dismissed by the compositor focusing another surface, or a signal.
+            self.held
+                .retain(|entry| now.saturating_duration_since(entry.pressed_at) < MAX_HOLD);
+            let effects = self.normal.release_drag();
             self.apply(&effects);
             return effects;
         }
@@ -289,7 +290,9 @@ impl Session {
             if entry.next <= now {
                 // Cap the schedule rather than catching up: after a stall the
                 // cursor should move once, not a hundred times.
-                let late = now.saturating_duration_since(entry.next).min(REPEAT_CEILING);
+                let late = now
+                    .saturating_duration_since(entry.next)
+                    .min(REPEAT_CEILING);
                 entry.next = now + REPEAT_INTERVAL.saturating_sub(late);
                 due.push((
                     entry.keysym,
@@ -305,7 +308,7 @@ impl Session {
                 // The entry is rescheduled only if `act` leaves it alone, and
                 // `pressed_at` keeps the growth counting from the press.
                 effects.extend(self.act(action, fast, held));
-                self.schedule(action, now, fast, pressed_at, REPEAT_INTERVAL);
+                self.schedule(keysym, now, fast, pressed_at, REPEAT_INTERVAL);
             }
         }
         effects
@@ -322,34 +325,33 @@ impl Session {
 
     /// Remember that a repeatable action's key is down and when it should next
     /// fire. A non-repeatable action, or a key bound outside normal mode, has
-    /// nothing to schedule.
+    /// nothing to schedule. The pressed key is stored as it arrived: one action
+    /// may be bound to several keys, and the release that stops the repeat is
+    /// matched by keysym.
     fn schedule(
         &mut self,
-        action: Action,
+        keysym: Keysym,
         now: Instant,
         fast: bool,
         pressed_at: Instant,
         delay: Duration,
     ) {
-        if self.mode != Mode::Normal || !is_repeatable(action) {
+        if self.mode != Mode::Normal {
             return;
         }
-        let keysym = self
-            .config
-            .bindings
-            .normal
-            .iter()
-            .find(|(_, bound)| **bound == action)
-            .map(|(keysym, _)| *keysym);
-        if let Some(keysym) = keysym {
-            self.held.retain(|entry| entry.keysym != keysym);
-            self.held.push(Held {
-                keysym,
-                next: now + delay,
-                pressed_at,
-                fast,
-            });
+        let Some(action) = self.config.bindings.normal.get(&keysym).copied() else {
+            return;
+        };
+        if !is_repeatable(action) {
+            return;
         }
+        self.held.retain(|entry| entry.keysym != keysym);
+        self.held.push(Held {
+            keysym,
+            next: now + delay,
+            pressed_at,
+            fast,
+        });
     }
 
     fn act(&mut self, action: Action, fast: bool, held: Duration) -> Vec<Effect> {
@@ -364,7 +366,7 @@ impl Session {
         }
 
         let context = self.context();
-        let effects = match self.mode {
+        let mut effects = match self.mode {
             Mode::Normal => {
                 // Only the step is scaled: grid and hint place the pointer
                 // absolutely, so the growth has nothing to act on there.
@@ -377,6 +379,13 @@ impl Session {
             Mode::Grid => self.grid.on_action(action, &context),
             Mode::Hint => self.hint.on_action(action),
         };
+        // The preset scales the wheel as well as the step, so `[` remains a
+        // fine adjustment when the thing under the pointer needs scrolling.
+        for effect in &mut effects {
+            if let Effect::Scroll { steps } = effect {
+                *steps *= self.speed;
+            }
+        }
 
         self.finish(effects)
     }
@@ -533,6 +542,7 @@ impl Session {
         // size fixed at 14 is 19 minutes of arc on a 1440p panel and 13 on a 4K
         // one, which is the difference between reading it and squinting.
         frame.label_size = self.config.theme.badge_font_size * (self.screen.1 as f32 / 720.0);
+        frame.status_size = self.config.theme.status_font_size * (self.screen.1 as f32 / 720.0);
         if self.mode == Mode::Grid {
             frame.grid = Some(GridFrame {
                 grid: &self.grid,
@@ -586,11 +596,9 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         eprintln!("{warning}");
     }
 
-    watch_for_signals();
-    let mut wl = Wayland::connect()?;
-    wl.place_overlay()?;
-
-    let screen = wl.state.logical_size();
+    // Everything that can be decided from the configuration alone happens
+    // before the compositor is touched: a mistake here must not flash the
+    // overlay or take the keyboard for a session that cannot run.
     if config.grid_cells().is_none() {
         anyhow::bail!(
             "the grid partition is {}x{}, which needs {} cell keys but only {} are bound",
@@ -600,6 +608,48 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
             config.bindings.grid_cells.len()
         );
     }
+    let needed = (config.grid_columns.max(1) * config.grid_rows.max(1)) as usize;
+    let cells = &config.bindings.grid_cells;
+    if cells.len() > needed {
+        eprintln!(
+            "windhover: grid_cells has {} keys but a {}x{} partition uses {}; \
+             the extras do nothing",
+            cells.len(),
+            config.grid_columns,
+            config.grid_rows,
+            needed
+        );
+    }
+    let unique: std::collections::HashSet<_> = cells.iter().collect();
+    if unique.len() != cells.len() {
+        eprintln!("windhover: grid_cells repeats a key, so one of the cells cannot be selected");
+    }
+
+    // Resolve the font before the overlay appears; fc-match is a subprocess and
+    // its latency belongs before the grab, not after it.
+    let (mut fonts, warning) = Fonts::load(&config.theme.font_family);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+
+    watch_for_signals();
+    let mut wl = Wayland::connect()?;
+    wl.place_overlay()?;
+
+    // The overlay has taken the keyboard, so the keymap has been sent by now.
+    // Without one every key event resolves to nothing, including Escape, and
+    // the session would wait forever for a key that cannot arrive.
+    wl.roundtrip()?;
+    if !wl.state.keys.keymap_ready() {
+        let reason = wl
+            .state
+            .keys
+            .keymap_error()
+            .unwrap_or("the compositor sent no keymap");
+        anyhow::bail!("the keyboard has no usable keymap: {reason}");
+    }
+
+    let screen = wl.state.logical_size();
     let mut session = Session::new(screen, config, oneshot);
     session.observe_cursor(wl.state.cursor());
     if start != Mode::Normal {
@@ -608,13 +658,31 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         session.switch_to(start);
     }
     let mut badges = render::Badges::default();
-    let (mut fonts, warning) = Fonts::load(&session.config.theme.font_family);
-    if let Some(warning) = warning {
-        eprintln!("{warning}");
+
+    let result = (|| -> Result<()> {
+        redraw(&mut wl, &session, &mut fonts, &mut badges)?;
+        drive(&mut wl, &mut session, &mut fonts, &mut badges)
+    })();
+
+    // However the session ended — a key, a signal, a compositor error, the
+    // overlay closing — a button it is holding is still held in the application,
+    // which has no way to learn otherwise. This runs even when driving failed:
+    // an I/O error must not skip the release.
+    if let Some(Effect::Drag(pressed)) = session.leaving().into_iter().next() {
+        let _ = wl.button(BTN_LEFT, pressed);
     }
+    wl.finish();
+    result
+}
 
-    redraw(&mut wl, &session, &mut fonts, &mut badges)?;
-
+/// Run the event loop. Kept separate so `run` can always do the teardown, on
+/// every path including an I/O error.
+fn drive(
+    wl: &mut Wayland,
+    session: &mut Session,
+    fonts: &mut Option<Fonts>,
+    badges: &mut render::Badges,
+) -> Result<()> {
     let mut exit = false;
     while !exit && !wl.state.closed && !interrupted() {
         let now = Instant::now();
@@ -648,6 +716,21 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
                     "windhover: this keyboard layout cannot produce these bindings, \
                      so they will do nothing: {}",
                     missing.join(", ")
+                );
+            }
+            let untypeable: Vec<char> = session
+                .config
+                .hint_charset
+                .iter()
+                .copied()
+                .filter(|ch| !reachable.contains(&xkb::utf32_to_keysym(*ch as u32)))
+                .collect();
+            if !untypeable.is_empty() {
+                let names: Vec<String> = untypeable.iter().map(|ch| format!("`{ch}`")).collect();
+                eprintln!(
+                    "windhover: this keyboard layout cannot type these hint label characters, \
+                     so their targets are unreachable: {}",
+                    names.join(" ")
                 );
             }
             trace::log(format_args!(
@@ -727,17 +810,10 @@ pub fn run(start: Mode, config_path: Option<&std::path::Path>, oneshot: bool) ->
         // down in the same flush (two runs in two, four buttons lost; with the
         // repaint, six runs clean).
         if session.take_redraw() {
-            redraw(&mut wl, &session, &mut fonts, &mut badges)?;
+            redraw(wl, session, fonts, badges)?;
         }
     }
 
-    // However the session ended — a key, a signal, the compositor closing the
-    // overlay, the keyboard going away — a button it is holding is still held in
-    // the application, which has no way to learn otherwise.
-    if let Some(Effect::Drag(pressed)) = session.leaving().into_iter().next() {
-        wl.button(BTN_LEFT, pressed)?;
-    }
-    wl.finish();
     Ok(())
 }
 
@@ -756,6 +832,7 @@ fn redraw(
         };
         render::draw(&mut canvas, &theme, fonts, badges, &frame);
     })
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -787,8 +864,10 @@ mod tests {
         // output is what the theme names, and a taller one scales from there.
         let small = Session::new((1280, 720), Config::default(), false);
         assert_eq!(small.frame(1.0).label_size, 14.0);
+        assert_eq!(small.frame(1.0).status_size, 13.0);
         let large = Session::new((2560, 1440), Config::default(), false);
         assert_eq!(large.frame(1.0).label_size, 28.0);
+        assert_eq!(large.frame(1.0).status_size, 26.0);
     }
 
     #[test]
@@ -797,7 +876,11 @@ mod tests {
         let alphabet = session.config.hint_charset.len();
         let lattice = Lattice::capped(session.config.hint_cell_for(session.screen), alphabet);
         let (columns, rows) = lattice.lines(session.screen);
-        assert!(columns.len() - 1 <= alphabet, "{} columns", columns.len() - 1);
+        assert!(
+            columns.len() - 1 <= alphabet,
+            "{} columns",
+            columns.len() - 1
+        );
         assert!(rows.len() - 1 <= alphabet, "{} rows", rows.len() - 1);
     }
 
@@ -805,12 +888,38 @@ mod tests {
     fn a_preset_scales_the_step_a_move_uses() {
         let mut session = session();
         let step = session.step();
-        assert_eq!(press(&mut session, "bracketright"), vec![Effect::Speed(4.0)]);
+        assert_eq!(
+            press(&mut session, "bracketright"),
+            vec![Effect::Speed(4.0)]
+        );
         assert_eq!(move_dx(&press(&mut session, "l")), step * 4.0);
         assert_eq!(press(&mut session, "bracketleft"), vec![Effect::Speed(0.1)]);
         assert_eq!(move_dx(&press(&mut session, "l")), step * 0.1);
         assert_eq!(press(&mut session, "backslash"), vec![Effect::Speed(1.0)]);
         assert_eq!(move_dx(&press(&mut session, "l")), step);
+    }
+
+    #[test]
+    fn a_preset_scales_the_wheel_too() {
+        let mut session = session();
+        press(&mut session, "bracketleft");
+        assert_eq!(
+            press(&mut session, "d"),
+            vec![Effect::Scroll { steps: 0.1 }],
+            "the fine preset did not shorten the wheel"
+        );
+        press(&mut session, "bracketright");
+        assert_eq!(
+            press(&mut session, "d"),
+            vec![Effect::Scroll { steps: 4.0 }],
+            "the coarse preset did not lengthen the wheel"
+        );
+        press(&mut session, "3");
+        assert_eq!(
+            press(&mut session, "u"),
+            vec![Effect::Scroll { steps: -12.0 }],
+            "the multiplier and the preset must multiply together"
+        );
     }
 
     #[test]
@@ -1002,7 +1111,8 @@ mod tests {
     }
 
     #[test]
-    fn a_held_movement_key_repeats_after_the_delay() {        let mut session = session();
+    fn a_held_movement_key_repeats_after_the_delay() {
+        let mut session = session();
         let start = Instant::now();
         let keysym = parse_key("l").unwrap();
         session.on_press(keysym, false, start);
@@ -1025,6 +1135,27 @@ mod tests {
     }
 
     #[test]
+    fn a_repeat_belongs_to_the_key_that_was_pressed() {
+        // An action may be bound to several keys. The held entry has to carry
+        // the key that actually went down, or releasing it cannot stop the
+        // repeat and the session runs until the hold limit.
+        let (config, _) = Config::parse("normal_left: h Left\n");
+        let mut session = Session::new((1280, 720), config, false);
+        let start = Instant::now();
+        for name in ["h", "Left"] {
+            let keysym = parse_key(name).unwrap();
+            session.on_press(keysym, false, start);
+            assert_eq!(session.held.len(), 1, "{name}");
+            assert_eq!(
+                session.held[0].keysym, keysym,
+                "{name} scheduled its repeat under a different binding"
+            );
+            session.on_release(keysym);
+            assert!(session.held.is_empty(), "{name} left its repeat behind");
+        }
+    }
+
+    #[test]
     fn grid_and_hint_keys_do_not_repeat() {
         let mut session = session();
         let start = Instant::now();
@@ -1036,7 +1167,8 @@ mod tests {
     }
 
     #[test]
-    fn the_next_repeat_is_scheduled_only_while_a_key_is_held() {        let mut session = session();
+    fn the_next_repeat_is_scheduled_only_while_a_key_is_held() {
+        let mut session = session();
         let start = Instant::now();
         assert_eq!(session.time_to_next_repeat(start), None);
         session.on_press(parse_key("j").unwrap(), false, start);
@@ -1150,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hold_that_outlasts_its_release_ends_the_session() {
+    fn a_hold_that_outlasts_its_release_stops_repeating_without_ending_the_session() {
         let mut session = session();
         let start = Instant::now();
         press_with(&mut session, "v", false, start);
@@ -1159,12 +1291,20 @@ mod tests {
         // Still a hold before the limit, so the repeat carries on.
         let before = session.tick(start + MAX_HOLD - Duration::from_millis(1));
         assert!(!before.contains(&Effect::Exit), "{before:?}");
-        assert!(before.iter().any(|e| matches!(e, Effect::Move { .. })), "{before:?}");
+        assert!(
+            before.iter().any(|e| matches!(e, Effect::Move { .. })),
+            "{before:?}"
+        );
 
         let effects = session.tick(start + MAX_HOLD);
-        assert_eq!(effects, vec![Effect::Drag(false), Effect::Exit]);
+        assert_eq!(effects, vec![Effect::Drag(false)]);
         assert_eq!(session.time_to_next_repeat(start + MAX_HOLD), None);
         assert!(!session.frame(1.0).dragging);
+
+        // A legitimate long hold must not throw the session away; the key that
+        // ends it is still available afterwards.
+        let quit = press_with(&mut session, "Escape", false, start + MAX_HOLD);
+        assert!(quit.contains(&Effect::Exit), "{quit:?}");
     }
 
     #[test]
@@ -1174,7 +1314,7 @@ mod tests {
         press_with(&mut session, "l", false, start);
         let effects = session.tick(start + REPEAT_DELAY + Duration::from_millis(1));
         assert!(!effects.contains(&Effect::Exit), "{effects:?}");
-        assert!(session.time_to_next_repeat(start) .is_some());
+        assert!(session.time_to_next_repeat(start).is_some());
     }
 
     #[test]
@@ -1190,7 +1330,11 @@ mod tests {
         // the key or end the drag: they have to end themselves.
         let effects = session.note_keyboard(false, start);
         assert_eq!(effects, vec![Effect::Drag(false)]);
-        assert_eq!(session.time_to_next_repeat(start), None, "the pointer kept moving");
+        assert_eq!(
+            session.time_to_next_repeat(start),
+            None,
+            "the pointer kept moving"
+        );
         assert!(!session.frame(1.0).dragging);
     }
 

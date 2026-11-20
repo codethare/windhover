@@ -17,9 +17,14 @@ pub fn assign(count: usize, charset: &[char]) -> Vec<String> {
     }
     let base = charset.len();
     // One character can only ever name one target, so an alphabet of one has
-    // nothing to spread over the rest.
+    // nothing to spread over the rest. Returning one label for a larger count
+    // would silently drop every target after the first.
     if base == 1 {
-        return vec![charset[0].to_string()];
+        return if count == 1 {
+            vec![charset[0].to_string()]
+        } else {
+            Vec::new()
+        };
     }
     let mut length = 1usize;
     while base.saturating_pow(length as u32) < count {
@@ -37,10 +42,7 @@ pub fn assign(count: usize, charset: &[char]) -> Vec<String> {
     let room = base.saturating_pow(length as u32) - count;
     let denial = base.saturating_pow(length as u32 - 1) - 1;
     let short = (room / denial).min(base);
-    let mut labels: Vec<String> = charset[..short]
-        .iter()
-        .map(|ch| ch.to_string())
-        .collect();
+    let mut labels: Vec<String> = charset[..short].iter().map(|ch| ch.to_string()).collect();
     // The longer labels may not start with a character a short label took, or
     // that short label would be a prefix of them.
     let tail = base.saturating_pow(length as u32 - 1);
@@ -50,7 +52,11 @@ pub fn assign(count: usize, charset: &[char]) -> Vec<String> {
         }
         let first = short + index / tail;
         let rest = index % tail;
-        labels.push(format!("{}{}", charset[first], label(rest, length - 1, charset)));
+        labels.push(format!(
+            "{}{}",
+            charset[first],
+            label(rest, length - 1, charset)
+        ));
     }
     labels
 }
@@ -139,7 +145,7 @@ mod tests {
         assert_eq!(lengths(&labels).iter().filter(|len| **len == 1).count(), 8);
         assert!(lengths(&assign(81, &charset())).iter().all(|len| *len == 2));
         assert!(lengths(&assign(82, &charset())).iter().all(|len| *len <= 3));
-        assert!(lengths(&assign(82, &charset())).iter().any(|len| *len == 3));
+        assert!(lengths(&assign(82, &charset())).contains(&3));
     }
 
     #[test]
@@ -157,5 +163,13 @@ mod tests {
     #[test]
     fn an_empty_charset_produces_nothing_rather_than_looping() {
         assert!(assign(10, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_one_character_alphabet_can_name_only_one_target() {
+        assert_eq!(assign(1, &['a']), vec!["a".to_string()]);
+        // One character cannot name two targets; dropping them silently would
+        // make the second unreachable.
+        assert!(assign(2, &['a']).is_empty());
     }
 }

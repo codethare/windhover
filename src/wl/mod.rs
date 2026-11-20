@@ -8,16 +8,14 @@ pub mod seat;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
-use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use wayland_client::globals::{registry_queue_init, BindError, GlobalList, GlobalListContents};
+use anyhow::{Context, Result, anyhow};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use wayland_client::globals::{BindError, GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_registry, wl_seat, wl_shm,
     wl_shm_pool, wl_surface,
 };
-use wayland_client::{
-    delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle,
-};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1;
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1;
@@ -63,7 +61,6 @@ pub struct State {
     pub pointer_pos: Option<(f64, f64)>,
     pub closed: bool,
     pub keyboard_ready: bool,
-    pub pointer_ready: bool,
     /// Set once the layout fallback has been explained, so it is said once.
     space_warned: bool,
     vp: Option<VirtualPointer>,
@@ -165,8 +162,7 @@ impl State {
     /// output, where there is no pointer to report).
     pub fn cursor(&self) -> (f64, f64) {
         let (w, h) = self.logical_size();
-        self.pointer_pos
-            .unwrap_or((w as f64 / 2.0, h as f64 / 2.0))
+        self.pointer_pos.unwrap_or((w as f64 / 2.0, h as f64 / 2.0))
     }
 }
 
@@ -233,9 +229,9 @@ impl Wayland {
                 globals
                     .registry()
                     .bind(global.name, global.version.min(4), &qh, index);
-            let xdg = xdg_output_manager.as_ref().map(|manager| {
-                manager.get_xdg_output(&output, &qh, index)
-            });
+            let xdg = xdg_output_manager
+                .as_ref()
+                .map(|manager| manager.get_xdg_output(&output, &qh, index));
             outputs.push(OutputEntry {
                 output: Some(output),
                 _xdg: xdg,
@@ -277,7 +273,6 @@ impl Wayland {
             closed: false,
             keyboard_ready: false,
             space_warned: false,
-            pointer_ready: false,
             vp: None,
         };
 
@@ -316,10 +311,12 @@ impl Wayland {
     /// Dispatch everything that has arrived, waiting at most `timeout` for more.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<()> {
         self.conn.flush().context("flush wayland requests")?;
-        let mut waited = false;
         if let Some(guard) = self.conn.prepare_read() {
             let fd = guard.connection_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            let mut fds = [PollFd::new(
+                &fd,
+                PollFlags::IN | PollFlags::HUP | PollFlags::ERR,
+            )];
             let timespec = timeout.map(|d| Timespec {
                 tv_sec: d.as_secs() as i64,
                 tv_nsec: d.subsec_nanos() as i64,
@@ -331,17 +328,24 @@ impl Wayland {
                 Err(rustix::io::Errno::INTR) => 0,
                 Err(err) => return Err(err).context("poll wayland socket"),
             };
-            waited = ready > 0 && fds[0].revents().contains(PollFlags::IN);
-            if waited {
-                match guard.read() {
-                    Ok(_) => {}
-                    Err(wayland_client::backend::WaylandError::Io(err))
-                        if err.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(err) => return Err(err).context("read wayland events"),
+            if ready > 0 {
+                let revents = fds[0].revents();
+                if revents.contains(PollFlags::IN) {
+                    match guard.read() {
+                        Ok(_) => {}
+                        Err(wayland_client::backend::WaylandError::Io(err))
+                            if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(err) => return Err(err).context("read wayland events"),
+                    }
+                }
+                // Reading on IN would observe EOF, but a wakeup for HUP/ERR
+                // alone must not look like a timeout: without this the loop
+                // polls an already-closed socket forever.
+                if revents.intersects(PollFlags::HUP | PollFlags::ERR) {
+                    return Err(anyhow!("the compositor closed the Wayland connection"));
                 }
             }
         }
-        let _ = waited;
         self.queue
             .dispatch_pending(&mut self.state)
             .context("dispatch wayland events")?;
@@ -362,8 +366,18 @@ impl Wayland {
 
         for candidate in candidates {
             self.state.pointer_pos = None;
-            self.create_overlay(candidate)?;
+            // One output refusing a layer surface must not take the session
+            // with it; the next candidate may still be the right one.
+            if let Err(err) = self.create_overlay(candidate) {
+                trace::log(format_args!(
+                    "overlay candidate {candidate:?} failed: {err:#}"
+                ));
+                continue;
+            }
             if self.state.pointer_pos.is_some() {
+                // The surface is mapped, so `wl_surface::enter` has named the
+                // output and the integer scale is no longer a guess.
+                self.settle_scale()?;
                 // The pointer position is known, which is the last thing the
                 // overlay was needed for. From here the applications have it.
                 self.hand_over_pointer()?;
@@ -379,8 +393,65 @@ impl Wayland {
         // not send enter before the first frame). Keep the compositor's choice.
         self.state.pointer_pos = None;
         self.create_overlay(None)?;
+        self.settle_scale()?;
         self.hand_over_pointer()?;
         self.establish_virtual_pointer()?;
+        Ok(())
+    }
+
+    /// Once the surface is mapped, `wl_surface::enter` names the output. On a
+    /// compositor without fractional scale the transparent first frame was
+    /// sized from a guessed scale; rebuild the ring at the output's real
+    /// integer scale before anything is drawn with it.
+    fn settle_scale(&mut self) -> Result<()> {
+        let Some(index) = self.state.overlay_output.or(self.state.output_index) else {
+            return Ok(());
+        };
+        let fallback_scale = self
+            .state
+            .outputs
+            .get(index)
+            .map(|entry| entry.info.scale)
+            .unwrap_or(1);
+        let geometry = {
+            let Some(overlay) = self.state.overlay.as_mut() else {
+                return Ok(());
+            };
+            overlay.geometry(fallback_scale)
+        };
+        let needs_ring = self
+            .state
+            .ring
+            .as_ref()
+            .is_none_or(|ring| ring.size() != geometry.buffer);
+        if !needs_ring {
+            if let Some(overlay) = &self.state.overlay {
+                overlay.apply(&geometry);
+            }
+            return Ok(());
+        }
+
+        let ring = BufferRing::new(
+            &self.state.shm,
+            &self.qh,
+            geometry.buffer.0,
+            geometry.buffer.1,
+        )?;
+        if let Some(overlay) = &self.state.overlay {
+            overlay.apply(&geometry);
+        }
+        let previous = self.state.ring.replace(ring);
+        // Present from the new ring so the old buffer is no longer attached,
+        // then let its release arrive before destroying it. If backpressure
+        // skipped the frame, the old buffer is still attached: leave its ring
+        // alone rather than destroying a buffer the surface is using.
+        let presented = self.present_with(|_, _, _| {})?;
+        self.roundtrip()?;
+        if presented {
+            if let Some(previous) = previous {
+                previous.destroy();
+            }
+        }
         Ok(())
     }
 
@@ -425,12 +496,22 @@ impl Wayland {
 
         for _ in 0..16 {
             self.roundtrip()?;
-            if self.state.overlay.as_ref().is_some_and(Overlay::is_configured) {
+            if self
+                .state
+                .overlay
+                .as_ref()
+                .is_some_and(Overlay::is_configured)
+            {
                 break;
             }
         }
         self.state.output_index = output_index;
-        if self.state.overlay.as_ref().is_none_or(|o| !o.is_configured()) {
+        if self
+            .state
+            .overlay
+            .as_ref()
+            .is_none_or(|o| !o.is_configured())
+        {
             return Err(anyhow!(
                 "the compositor never sent a layer surface configure event"
             ));
@@ -446,22 +527,34 @@ impl Wayland {
             .as_mut()
             .expect("overlay was just created")
             .geometry(fallback_scale);
-        let ring = BufferRing::new(
-            &self.state.shm,
-            &self.qh,
-            geometry.buffer.0,
-            geometry.buffer.1,
-        )?;
+        let ring = match self.state.ring.take() {
+            Some(ring) if ring.size() == geometry.buffer => ring,
+            Some(ring) => {
+                ring.destroy();
+                BufferRing::new(
+                    &self.state.shm,
+                    &self.qh,
+                    geometry.buffer.0,
+                    geometry.buffer.1,
+                )?
+            }
+            None => BufferRing::new(
+                &self.state.shm,
+                &self.qh,
+                geometry.buffer.0,
+                geometry.buffer.1,
+            )?,
+        };
         if let Some(overlay) = &self.state.overlay {
             overlay.apply(&geometry);
         }
-        if let Some(previous) = self.state.ring.replace(ring) {
-            previous.destroy();
-        }
+        self.state.ring = Some(ring);
 
         // A transparent first frame maps the surface, and the pointer enter
-        // that follows is how we learn which output the pointer is on.
-        self.present_with(|_, _, _| {})?;
+        // that follows is how we learn which output the pointer is on. If the
+        // frame is skipped, this candidate simply never sees the pointer and
+        // the next one is tried.
+        let _ = self.present_with(|_, _, _| {})?;
         for _ in 0..4 {
             self.roundtrip()?;
             if self.state.pointer_pos.is_some() {
@@ -480,11 +573,8 @@ impl Wayland {
         // overlay for us leaves us guessing, and the guess is the origin.
         self.roundtrip()?;
         let index = self.state.overlay_output.or(self.state.output_index);
-        let pointer = VirtualPointer::create(
-            &self.state.vp_manager,
-            Some(&self.state.seat),
-            &self.qh,
-        );
+        let pointer =
+            VirtualPointer::create(&self.state.vp_manager, Some(&self.state.seat), &self.qh);
         let space = self.state.pointer_space();
         let name = index
             .and_then(|i| self.state.outputs.get(i))
@@ -521,8 +611,10 @@ impl Wayland {
         );
     }
 
-    /// Render a frame into a free shared-memory buffer and commit it.
-    pub fn present_with<F>(&mut self, draw: F) -> Result<()>
+    /// Render a frame into a free shared-memory buffer and commit it. Returns
+    /// `false` when both buffers are still the compositor's and the frame was
+    /// skipped; the caller can keep the old frame attached.
+    pub fn present_with<F>(&mut self, draw: F) -> Result<bool>
     where
         F: FnOnce(&mut [u8], u32, u32),
     {
@@ -536,7 +628,15 @@ impl Wayland {
             // release one.
             self.dispatch(Some(Duration::from_millis(20)))?;
         }
-        let index = index.ok_or_else(|| anyhow!("compositor never released a shared memory buffer"))?;
+        let Some(index) = index else {
+            // Both buffers are still the compositor's after a long wait. That is
+            // backpressure, not a reason to tear the session down: the next
+            // input schedules another frame.
+            trace::log(format_args!(
+                "no shared memory buffer free; skipping this frame"
+            ));
+            return Ok(false);
+        };
         let ring = self.state.ring.as_mut().expect("ring exists");
         let (width, height) = ring.size();
         draw(ring.pixels_mut(index), width, height);
@@ -549,7 +649,7 @@ impl Wayland {
             .clone();
         ring.present(index, &surface)?;
         self.conn.flush().context("flush frame")?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn take_keys(&mut self) -> Vec<KeyEvent> {
@@ -578,7 +678,7 @@ impl Wayland {
         Ok(())
     }
 
-    pub fn scroll(&mut self, steps: i32) -> Result<()> {
+    pub fn scroll(&mut self, steps: f64) -> Result<()> {
         if let Some(pointer) = &self.state.vp {
             pointer.scroll(steps);
         }

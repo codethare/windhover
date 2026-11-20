@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use xkbcommon::xkb;
 
 pub type Keysym = xkb::Keysym;
@@ -170,10 +170,7 @@ impl Default for Bindings {
                 ("space", Action::GridWarpClick),
                 ("Escape", Action::Quit),
             ]),
-            hint: table(&[
-                ("BackSpace", Action::HintBack),
-                ("Escape", Action::Quit),
-            ]),
+            hint: table(&[("BackSpace", Action::HintBack), ("Escape", Action::Quit)]),
             grid_cells: ["q", "w", "a", "s"]
                 .iter()
                 .map(|name| parse_key(name).expect("built-in cell keys are valid"))

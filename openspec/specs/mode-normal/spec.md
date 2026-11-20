@@ -138,24 +138,30 @@ repeat while held.
 ### Requirement: Mouse button actions
 
 Normal mode SHALL provide three keys that inject a left, middle and right click at
-the current pointer position.
+the current pointer position. A click SHALL end the session, after the keyboard
+grab has been given up and the button injected, so the application it landed on
+keeps the focus the click gave it.
 
 #### Scenario: Left click
 
 - **WHEN** the user presses `m`
-- **THEN** one left click occurs at the current pointer position, and the overlay
-  does not intercept that click
+- **THEN** the layer surface stops asking for the keyboard, one left click occurs
+  at the current pointer position, and the session exits with status 0
 
 #### Scenario: Middle and right click
 
 - **WHEN** the user presses `,` or `.`
-- **THEN** one middle or one right click occurs at the current pointer position
+- **THEN** one middle or one right click occurs at the current pointer position,
+  and the session exits with status 0
 
 ### Requirement: Dragging
 
 Normal mode SHALL provide a drag toggle: while it is on, the left button stays
-held and the pointer can be moved by any means. Pressing the toggle again, or
-injecting any mouse button, SHALL end the drag and release the left button.
+held and the pointer can be moved by the direction keys and by the edge jumps.
+Pressing the toggle again, or injecting any mouse button, SHALL end the drag and
+release the left button. Changing mode SHALL end the drag as well, releasing the
+button before the session answers the change, and so SHALL the session ending,
+however it ends.
 
 #### Scenario: Starting and ending a drag
 
@@ -164,10 +170,16 @@ injecting any mouse button, SHALL end the drag and release the left button.
 
 #### Scenario: Moving during a drag
 
-- **WHEN** a drag is in progress and the user moves using the direction keys, an
-  edge jump, or by switching to grid mode
+- **WHEN** a drag is in progress and the user moves using the direction keys or an
+  edge jump
 - **THEN** the target application keeps receiving the pointer position during the
   drag
+
+#### Scenario: A mode change ends the drag
+
+- **WHEN** a drag is in progress and the user switches to grid mode or hint mode
+- **THEN** the left button is released before the mode changes, and the session
+  injects no press while it is held
 
 #### Scenario: Ending a drag with a click
 
@@ -177,7 +189,8 @@ injecting any mouse button, SHALL end the drag and release the left button.
 
 #### Scenario: Released when the session exits
 
-- **WHEN** the user exits the session while a drag is in progress
+- **WHEN** the user exits the session while a drag is in progress, by `Escape`, by
+  a signal, by the compositor closing the overlay, or by the keyboard going away
 - **THEN** the left button is released, leaving no stuck press behind
 
 ### Requirement: Mode switching and exit

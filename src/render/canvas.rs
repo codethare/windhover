@@ -64,13 +64,17 @@ impl<'a> Canvas<'a> {
         let (width, height) = (self.width as i32, self.height as i32);
         let (source_width, source_height) = (source.width() as i32, source.height() as i32);
         let (left, top) = (x.max(0), y.max(0));
-        let (right, bottom) = ((x + source_width).min(width), (y + source_height).min(height));
+        let (right, bottom) = (
+            (x + source_width).min(width),
+            (y + source_height).min(height),
+        );
         if right <= left || bottom <= top {
             return;
         }
         let source = source.data();
         for row in top..bottom {
-            let source_start = ((row - y) as usize * source_width as usize + (left - x) as usize) * 4;
+            let source_start =
+                ((row - y) as usize * source_width as usize + (left - x) as usize) * 4;
             let source_row = &source[source_start..];
             let destination_start = (row as usize * self.width as usize + left as usize) * 4;
             let destination =
@@ -153,10 +157,10 @@ impl<'a> Canvas<'a> {
             let inverse = 255 - alpha;
             for step in 0..span {
                 let index = (base + step * stride) * 4;
-                for channel in 0..3 {
+                for (channel, source_channel) in source.iter().take(3).enumerate() {
                     let existing = self.bytes[index + channel] as u32;
                     self.bytes[index + channel] =
-                        (source[channel] as u32 * alpha / 255 + existing * inverse / 255) as u8;
+                        (*source_channel as u32 * alpha / 255 + existing * inverse / 255) as u8;
                 }
                 // Alpha composites like any other channel: premultiplied with a
                 // zero alpha would be a line nothing can see.
@@ -174,11 +178,17 @@ impl<'a> Canvas<'a> {
         let mut paint = Paint::default();
         paint.set_color(to_canvas(colour));
         paint.anti_alias = true;
-        self.pixmap()
-            .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        self.pixmap().fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Outlined rounded rectangle, drawn inside the given box.
+    #[allow(clippy::too_many_arguments)]
     pub fn rounded_rect_stroke(
         &mut self,
         x: f32,
@@ -212,6 +222,7 @@ impl<'a> Canvas<'a> {
 
     /// A translucent surface with an edge hairline: the panel and badge
     /// treatment, kept in one place so the modes cannot drift apart.
+    #[allow(clippy::too_many_arguments)]
     pub fn panel_with_edge(
         &mut self,
         x: f32,
@@ -307,7 +318,9 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<Path
     }
     let radius = radius.min(w / 2.0).min(h / 2.0).max(0.0);
     if radius <= 0.0 {
-        return Some(PathBuilder::from_rect(tiny_skia::Rect::from_xywh(x, y, w, h)?));
+        return Some(PathBuilder::from_rect(tiny_skia::Rect::from_xywh(
+            x, y, w, h,
+        )?));
     }
     let mut builder = PathBuilder::new();
     builder.move_to(x + radius, y);
@@ -353,14 +366,14 @@ mod tests {
         let mut source = tiny_skia::Pixmap::new(2, 2).unwrap();
         {
             let mut fragment = Canvas::new(source.data_mut(), 2, 2).unwrap();
-            fragment.rounded_rect(0.0, 0.0, 1.0, 1.0, 0.0, Rgba::rgba(0x0A, 0x84, 0xFF, 0xFF));
-            fragment.rounded_rect(1.0, 1.0, 1.0, 1.0, 0.0, Rgba::rgba(0xFF, 0x00, 0x00, 0x80));
+            fragment.rounded_rect(0.0, 0.0, 1.0, 1.0, 0.0, Rgba::rgba8(0x0A, 0x84, 0xFF, 0xFF));
+            fragment.rounded_rect(1.0, 1.0, 1.0, 1.0, 0.0, Rgba::rgba8(0xFF, 0x00, 0x00, 0x80));
         }
 
         let mut bytes = canvas_bytes(4, 4);
         {
             let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-            canvas.clear(Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+            canvas.clear(Rgba::rgba8(0xFF, 0xFF, 0xFF, 0xFF));
             canvas.blit(2, 1, &source);
         }
 
@@ -383,7 +396,7 @@ mod tests {
         let mut bytes = canvas_bytes(4, 4);
         {
             let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-            canvas.vline(2.0, 1.0, Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+            canvas.vline(2.0, 1.0, Rgba::rgba8(0xFF, 0xFF, 0xFF, 0xFF));
         }
         assert_eq!(pixel(&bytes, 4, 0, 0)[3], 0);
         assert_eq!(pixel(&bytes, 4, 1, 0)[3], 0x80);
@@ -395,7 +408,7 @@ mod tests {
         let mut bytes = canvas_bytes(4, 4);
         {
             let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-            canvas.hline(0.0, 1.0, Rgba::rgba(0xFF, 0xFF, 0xFF, 0xFF));
+            canvas.hline(0.0, 1.0, Rgba::rgba8(0xFF, 0xFF, 0xFF, 0xFF));
         }
         assert_eq!(pixel(&bytes, 4, 0, 0)[3], 0x80);
         assert_eq!(pixel(&bytes, 4, 0, 1)[3], 0);
@@ -407,7 +420,7 @@ mod tests {
         let mut bytes = canvas_bytes(4, 4);
         {
             let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-            canvas.vline(0.5, 1.0, Rgba::rgba(0x0A, 0x84, 0xFF, 0xFF));
+            canvas.vline(0.5, 1.0, Rgba::rgba8(0x0A, 0x84, 0xFF, 0xFF));
         }
         // Opaque blue, in the byte order the compositor reads.
         assert_eq!(pixel(&bytes, 4, 0, 2), [0xFF, 0x84, 0x0A, 0xFF]);
@@ -418,7 +431,7 @@ mod tests {
     fn a_drawn_rectangle_keeps_the_channel_order_too() {
         let mut bytes = canvas_bytes(4, 4);
         let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         canvas.rounded_rect(0.0, 0.0, 4.0, 4.0, 0.0, Rgba::rgb(0x0A, 0x84, 0xFF));
         assert_eq!(pixel(&bytes, 4, 2, 2), [0xFF, 0x84, 0x0A, 0xFF]);
     }
@@ -427,7 +440,7 @@ mod tests {
     fn filling_a_path_paints_inside_it() {
         let mut bytes = canvas_bytes(8, 8);
         let mut canvas = Canvas::new(&mut bytes, 8, 8).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         let mut builder = PathBuilder::new();
         builder.move_to(2.0, 2.0);
         builder.line_to(6.0, 2.0);
@@ -436,7 +449,11 @@ mod tests {
         builder.close();
         let path = builder.finish().unwrap();
         canvas.fill_path(&path, Rgba::rgb(0x0A, 0x84, 0xFF));
-        assert_eq!(pixel(&bytes, 8, 4, 4), [0xFF, 0x84, 0x0A, 0xFF], "channel order swapped");
+        assert_eq!(
+            pixel(&bytes, 8, 4, 4),
+            [0xFF, 0x84, 0x0A, 0xFF],
+            "channel order swapped"
+        );
         assert_eq!(pixel(&bytes, 8, 0, 0)[3], 0, "painted outside the path");
     }
 
@@ -445,7 +462,7 @@ mod tests {
         let mut bytes = canvas_bytes(4, 4);
         bytes.fill(0xAA);
         let mut canvas = Canvas::new(&mut bytes, 4, 4).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         assert_eq!(pixel(&bytes, 4, 1, 1), [0, 0, 0, 0]);
     }
 
@@ -461,7 +478,7 @@ mod tests {
     fn translucent_fill_is_premultiplied() {
         let mut bytes = canvas_bytes(2, 2);
         let mut canvas = Canvas::new(&mut bytes, 2, 2).unwrap();
-        canvas.clear(Rgba::rgba(255, 255, 255, 128));
+        canvas.clear(Rgba::rgba8(255, 255, 255, 128));
         let [r, g, b, a] = pixel(&bytes, 2, 0, 0);
         assert_eq!(a, 128);
         assert_eq!((r, g, b), (128, 128, 128));
@@ -471,7 +488,7 @@ mod tests {
     fn a_rounded_rect_leaves_the_corners_alone() {
         let mut bytes = canvas_bytes(20, 20);
         let mut canvas = Canvas::new(&mut bytes, 20, 20).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         canvas.rounded_rect(2.0, 2.0, 16.0, 16.0, 6.0, Rgba::rgb(255, 255, 255));
         // Well inside: filled.
         assert_eq!(pixel(&bytes, 20, 10, 10)[3], 255);
@@ -483,7 +500,7 @@ mod tests {
     fn a_stroke_draws_an_edge_and_leaves_the_middle() {
         let mut bytes = canvas_bytes(20, 20);
         let mut canvas = Canvas::new(&mut bytes, 20, 20).unwrap();
-        canvas.clear(Rgba::rgba(0, 0, 0, 0));
+        canvas.clear(Rgba::rgba8(0, 0, 0, 0));
         canvas.rounded_rect_stroke(1.0, 1.0, 18.0, 18.0, 4.0, 2.0, Rgba::rgb(255, 0, 0));
         assert!(pixel(&bytes, 20, 10, 1)[3] > 0, "top edge missing");
         assert_eq!(pixel(&bytes, 20, 10, 10)[3], 0, "middle should be empty");

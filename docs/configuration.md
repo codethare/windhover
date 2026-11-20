@@ -24,7 +24,11 @@ One option per line:
 - Only the first `:` splits the line, so a value may contain colons.
 - Options that take keys accept several space-separated keys on one line, and
   may also be repeated. Every value listed is equivalent.
-- The value `unbind` removes an option's bindings, including its defaults.
+- The value `unbind` removes a key option's bindings, including its defaults.
+- `grid_cells` is the exception: it is a positional list, not a binding. Each
+  line replaces the previous list, the order is row-major, and `unbind` does not
+  apply. Extra keys warn and do nothing; a repeated key leaves one cell
+  unselectable.
 
 A line the parser cannot use produces a warning on standard error naming the
 line and the reason, and is otherwise ignored. `windhover` keeps running with the
@@ -128,10 +132,10 @@ is what lets the shift level of a movement key jump to an edge.
 |---|---|---|
 | `step` | derived as `output_height / 72`, at least 4 | Normal-mode step in logical pixels. A held direction key grows this up to four times, by one factor every 200 ms, and `Ctrl` with a direction doubles it |
 | `grid_columns` `grid_rows` | `2` `2` | Partition of the grid region |
-| `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise |
+| `grid_cells` | `q w a s` | Cell keys, row major. Needs at least `grid_columns * grid_rows` entries; the session refuses to start otherwise. Extra keys are ignored with a warning |
 | `grid_min_span` | `40` | A region narrower than this in either direction hands over to normal mode |
 | `hint_cell` | derived so the output is filled with `len(hint_charset)²` cells | Wanted spacing between hint cells, in logical pixels. No axis ever gets more cells than the alphabet has characters, so a label is one character where there is spare room in the two-character budget and two everywhere else |
-| `hint_charset` | `asdfjkl;ghqwertyuiop` | Label alphabet, printable ASCII. Labels are all the same length, so the length grows rather than letting one label prefix another |
+| `hint_charset` | `asdfjkl;ghqwertyuiop` | Label alphabet, printable ASCII with no repeated character. Labels are prefix-free: spare room in the two-character budget becomes one-character labels for the first targets, and two characters everywhere else. Matching is case-sensitive, so Shift produces a different character |
 | `click_after_warp` | `false` | Click when a hint is selected, ending the session |
 | `font_family` | `sans-serif` | Resolved through `fc-match`, with a built-in path list as a fallback |
 | `accent` `text` `panel` | macOS dark palette | `RRGGBB` or `RRGGBBAA`, with or without a leading `#` |

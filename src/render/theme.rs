@@ -17,14 +17,13 @@ impl Rgba {
         Self { r, g, b, a: 255 }
     }
 
-    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub const fn rgba8(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
 
     pub const fn with_alpha(self, a: u8) -> Self {
         Self { a, ..self }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -59,10 +58,10 @@ impl Default for Theme {
         Self {
             accent: Rgba::rgb(0x0A, 0x84, 0xFF),
             text: Rgba::rgb(0xFF, 0xFF, 0xFF),
-            text_matched: Rgba::rgba(0xFF, 0xFF, 0xFF, 0x66),
-            panel: Rgba::rgba(0x1C, 0x1C, 0x1E, 0xE0),
-            panel_edge: Rgba::rgba(0xFF, 0xFF, 0xFF, 0x26),
-            shadow: Rgba::rgba(0x00, 0x00, 0x00, 0x59),
+            text_matched: Rgba::rgba8(0xFF, 0xFF, 0xFF, 0x66),
+            panel: Rgba::rgba8(0x1C, 0x1C, 0x1E, 0xE0),
+            panel_edge: Rgba::rgba8(0xFF, 0xFF, 0xFF, 0x26),
+            shadow: Rgba::rgba8(0x00, 0x00, 0x00, 0x59),
 
             corner_radius: 6.0,
             badge_radius: 5.0,
@@ -145,8 +144,8 @@ mod tests {
     #[test]
     fn a_colour_is_carried_by_its_alpha_variants() {
         let theme = Theme::default();
-        assert_eq!(theme.grid_line().a < theme.accent.a, true);
-        assert_eq!(theme.matched().a < theme.text.a, true);
+        assert!(theme.grid_line().a < theme.accent.a);
+        assert!(theme.matched().a < theme.text.a);
     }
 
     #[test]
@@ -155,6 +154,6 @@ mod tests {
         // than the panel a label sits in.
         let theme = Theme::default();
         assert!(theme.hint_cell().a < theme.surface().a / 2);
-        assert_eq!(theme.hint_cell().a > 0, true, "a cell has to be visible");
+        assert!(theme.hint_cell().a > 0, "a cell has to be visible");
     }
 }

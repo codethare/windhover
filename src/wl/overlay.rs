@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
-use rustix::fs::{memfd_create, ftruncate, MemfdFlags};
+use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use rustix::io::pwrite;
 use wayland_client::{
-    protocol::{wl_buffer, wl_compositor, wl_output, wl_region, wl_shm, wl_surface},
     Dispatch, QueueHandle,
+    protocol::{wl_buffer, wl_compositor, wl_output, wl_region, wl_shm, wl_surface},
 };
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
@@ -191,7 +191,12 @@ impl Overlay {
         let surface = compositor.create_surface(qh, ());
         let empty_region = compositor.create_region(qh, ());
         let viewport = viewporter.map(|v| v.get_viewport(&surface, qh, ()));
-        let fractional = fractional.map(|m| m.get_fractional_scale(&surface, qh, ()));
+        // Without a viewport there is no way to keep the surface logical while
+        // the buffer is scaled, so subscribing to fractional scale would leave
+        // the buffer larger than the surface it is attached to.
+        let fractional = viewporter
+            .and(fractional)
+            .map(|m| m.get_fractional_scale(&surface, qh, ()));
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
             output,
@@ -209,7 +214,8 @@ impl Overlay {
         );
         // Reserve nothing: other windows must keep their usable area.
         layer_surface.set_exclusive_zone(-1);
-        layer_surface.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
+        layer_surface
+            .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
         surface.commit();
 
         Self {
@@ -274,11 +280,7 @@ impl Overlay {
                 "windhover: compositor offers no fractional scale; rendering at integer scale {fallback_scale}"
             );
         }
-        compute_geometry(
-            self.logical_size(),
-            self.preferred_scale,
-            fallback_scale,
-        )
+        compute_geometry(self.logical_size(), self.preferred_scale, fallback_scale)
     }
 
     pub fn apply(&self, geometry: &Geometry) {
@@ -300,6 +302,7 @@ impl Overlay {
         if let Some(fractional) = self.fractional {
             fractional.destroy();
         }
+        self.empty_region.destroy();
         self.surface.destroy();
     }
 }

@@ -30,26 +30,16 @@ const FALLBACK_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ];
 
-/// Resolve a family name to a font file and say whether it came from the
-/// fallback list rather than the system's own font database. A generic name
-/// like `sans-serif` resolving to a concrete file is the system answering the
-/// question, not a substitution, so it is not worth a warning.
-pub fn find_font(family: &str) -> Option<(PathBuf, bool)> {
-    if let Some(path) = fc_match(family) {
-        return Some((path, false));
-    }
-    FALLBACK_PATHS
-        .iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-        .map(|path| (path, true))
-}
-
+/// Resolve a family name through fontconfig. A generic name like `sans-serif`
+/// resolving to a concrete file is the system answering the question, not a
+/// substitution.
 fn fc_match(family: &str) -> Option<PathBuf> {
     // The family is passed as its own argument, never through a shell, so a
-    // configuration value cannot become a command.
+    // configuration value cannot become a command. `--` keeps a family that
+    // begins with a dash from being read as an option.
     let output = Command::new("fc-match")
         .args(["-f", "%{file}"])
+        .arg("--")
         .arg(family)
         .output()
         .ok()?;
@@ -61,6 +51,13 @@ fn fc_match(family: &str) -> Option<PathBuf> {
     path.is_file().then(|| path.to_path_buf())
 }
 
+/// A file that both exists and parses as a font.
+fn read_font(path: &Path) -> Option<Vec<u8>> {
+    let data = std::fs::read(path).ok()?;
+    FontRef::from_index(&data, 0).ok()?;
+    Some(data)
+}
+
 pub struct Fonts {
     data: Vec<u8>,
 }
@@ -69,36 +66,44 @@ impl Fonts {
     /// Loads `family`, or the first fallback that exists. Returns the fonts and
     /// a warning to print when the requested family could not be used.
     pub fn load(family: &str) -> (Option<Self>, Option<String>) {
-        let Some((path, substituted)) = find_font(family) else {
-            return (
-                None,
-                Some(format!(
-                    "windhover: found no usable font for `{family}`; labels will not be drawn"
-                )),
-            );
-        };
-        let Ok(data) = std::fs::read(&path) else {
-            return (
-                None,
-                Some(format!(
-                    "windhover: could not read {}; labels will not be drawn",
-                    path.display()
-                )),
-            );
-        };
-        if FontRef::from_index(&data, 0).is_err() {
-            return (
-                None,
-                Some(format!("windhover: {} is not a font file", path.display())),
-            );
+        let mut rejected = None;
+        if let Some(path) = fc_match(family) {
+            if let Some(data) = read_font(&path) {
+                return (Some(Self { data }), None);
+            }
+            // fc-match answered with a path that cannot be used. That is not
+            // the same as fontconfig having no answer, but the fallback list is
+            // still the right next step.
+            rejected = Some(path);
         }
-        let warning = substituted.then(|| {
-            format!(
-                "windhover: no fontconfig answer for `{family}`; falling back to {}",
-                path.display()
-            )
-        });
-        (Some(Self { data }), warning)
+        for candidate in FALLBACK_PATHS {
+            let path = Path::new(candidate);
+            let Some(data) = read_font(path) else {
+                continue;
+            };
+            let warning = match &rejected {
+                Some(rejected) => format!(
+                    "windhover: {} is not a usable font; falling back to {}",
+                    rejected.display(),
+                    path.display()
+                ),
+                None => format!(
+                    "windhover: no fontconfig answer for `{family}`; falling back to {}",
+                    path.display()
+                ),
+            };
+            return (Some(Self { data }), Some(warning));
+        }
+        let warning = match rejected {
+            Some(rejected) => format!(
+                "windhover: {} is not a usable font; labels will not be drawn",
+                rejected.display()
+            ),
+            None => {
+                format!("windhover: found no usable font for `{family}`; labels will not be drawn")
+            }
+        };
+        (None, Some(warning))
     }
 
     /// A parsed view of the loaded file. Cheap: it validates the table
@@ -110,7 +115,10 @@ impl Fonts {
     /// Distance above and below the baseline, both positive, so centring a line
     /// on `y` is `y + (ascent - descent) / 2` for the baseline.
     pub fn ascent_descent(&self, size: f32) -> (f32, f32) {
-        let Some(metrics) = self.font().map(|font| font.metrics(Size::new(size), LocationRef::default())) else {
+        let Some(metrics) = self
+            .font()
+            .map(|font| font.metrics(Size::new(size), LocationRef::default()))
+        else {
             // A readable default rather than a zero-height badge.
             return (size * 0.8, size * 0.2);
         };
@@ -244,9 +252,11 @@ mod tests {
     fn a_generic_family_is_answered_without_a_warning() {
         // `sans-serif` must resolve on any system that has a font at all, and
         // the system answering is not a substitution.
-        let (path, substituted) = find_font("sans-serif").expect("no font found for sans-serif");
-        assert!(path.is_file());
-        assert!(!substituted, "fontconfig answered but we called it a fallback");
+        let path = fc_match("sans-serif").expect("no font found for sans-serif");
+        assert!(
+            read_font(&path).is_some(),
+            "fontconfig answered with an unusable file"
+        );
     }
 
     #[test]
@@ -254,7 +264,10 @@ mod tests {
         let (fonts, warning) = Fonts::load("A Family That Does Not Exist");
         let fonts = fonts.expect("fallback font");
         if let Some(warning) = warning {
-            assert!(warning.contains("A Family That Does Not Exist"), "{warning}");
+            assert!(
+                warning.contains("A Family That Does Not Exist"),
+                "{warning}"
+            );
         }
         assert!(fonts.measure("W", 20.0) > 0.0);
     }

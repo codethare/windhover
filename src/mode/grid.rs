@@ -213,13 +213,7 @@ mod tests {
     fn a_cell_key_shrinks_the_region_and_centres_the_cursor() {
         let mut grid = grid();
         let effects = grid.on_cell(1, &context());
-        assert_eq!(
-            effects,
-            vec![Effect::Warp {
-                x: 960.0,
-                y: 180.0
-            }]
-        );
+        assert_eq!(effects, vec![Effect::Warp { x: 960.0, y: 180.0 }]);
         assert_eq!(
             grid.region(),
             Rect {
@@ -338,10 +332,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![
-                Effect::Warp {
-                    x: 960.0,
-                    y: 180.0
-                },
+                Effect::Warp { x: 960.0, y: 180.0 },
                 Effect::Switch(Mode::Normal)
             ]
         );
@@ -355,10 +346,7 @@ mod tests {
         assert_eq!(
             grid.on_action(Action::GridWarpClick, &context),
             vec![
-                Effect::Warp {
-                    x: 960.0,
-                    y: 180.0
-                },
+                Effect::Warp { x: 960.0, y: 180.0 },
                 Effect::Click { button: BTN_LEFT },
                 Effect::Switch(Mode::Normal)
             ]

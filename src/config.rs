@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::keys::{key_name, modes_for, parse_key, Action, Bindings, Keysym};
-use crate::render::theme::Rgba;
+use crate::keys::{Action, Bindings, Keysym, key_name, modes_for, parse_key};
 use crate::render::Theme;
+use crate::render::theme::Rgba;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -52,7 +52,6 @@ impl Default for Config {
         }
     }
 }
-
 
 /// Where the configuration is looked for when the command line does not name a
 /// file: `$XDG_CONFIG_HOME/windhover/config`, falling back to `~/.config`.
@@ -190,8 +189,10 @@ impl Loader {
     }
 
     fn warn(&mut self, number: usize, line: &str, reason: &str) {
-        self.warnings
-            .push(format!("{}:{number}: {reason} (`{line}`), ignored", CONFIG_LABEL));
+        self.warnings.push(format!(
+            "{}:{number}: {reason} (`{line}`), ignored",
+            CONFIG_LABEL
+        ));
     }
 
     fn apply(&mut self, option: &str, value: &str) -> std::result::Result<(), String> {
@@ -200,8 +201,8 @@ impl Loader {
         }
         match option {
             "step" => self.config.step = Some(number(value, 1.0, f64::MAX)?),
-            "grid_columns" => self.config.grid_columns = number(value, 1.0, 64.0)? as u32,
-            "grid_rows" => self.config.grid_rows = number(value, 1.0, 64.0)? as u32,
+            "grid_columns" => self.config.grid_columns = integer(value, 1, 64)?,
+            "grid_rows" => self.config.grid_rows = integer(value, 1, 64)?,
             "grid_min_span" => self.config.grid_min_span = number(value, 1.0, f64::MAX)?,
             "grid_cells" => {
                 let keys = parse_keys(value)?;
@@ -218,6 +219,10 @@ impl Loader {
                 }
                 if charset.iter().any(|ch| !ch.is_ascii_graphic()) {
                     return Err("`hint_charset` must be printable ASCII".to_string());
+                }
+                let unique: HashSet<char> = charset.iter().copied().collect();
+                if unique.len() != charset.len() {
+                    return Err("`hint_charset` must not repeat a character".to_string());
                 }
                 self.config.hint_charset = charset;
             }
@@ -352,6 +357,16 @@ fn number(value: &str, low: f64, high: f64) -> std::result::Result<f64, String> 
     Ok(parsed)
 }
 
+fn integer(value: &str, low: u32, high: u32) -> std::result::Result<u32, String> {
+    let parsed: u32 = value
+        .parse()
+        .map_err(|_| format!("`{value}` is not a whole number"))?;
+    if parsed < low || parsed > high {
+        return Err(format!("`{value}` is outside {low}..{high}"));
+    }
+    Ok(parsed)
+}
+
 fn boolean(value: &str) -> std::result::Result<bool, String> {
     match value.to_ascii_lowercase().as_str() {
         "true" | "yes" | "on" | "1" => Ok(true),
@@ -373,7 +388,7 @@ fn colour(value: &str) -> std::result::Result<Rgba, String> {
     }
     let byte =
         |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).expect("two hexadecimal digits");
-    Ok(Rgba::rgba(
+    Ok(Rgba::rgba8(
         byte(0),
         byte(2),
         byte(4),
@@ -429,7 +444,10 @@ mod tests {
     fn a_line_without_a_colon_is_a_warning_not_a_failure() {
         let warnings = warns("this is not an option\n");
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("this is not an option"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("this is not an option"),
+            "{warnings:?}"
+        );
         assert!(warnings[0].contains(":1:"), "{warnings:?}");
     }
 
@@ -448,6 +466,12 @@ mod tests {
         let (config, warnings) = one("grid_columns", "0");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("grid_columns"), "{warnings:?}");
+        assert_eq!(config.grid_columns, Config::default().grid_columns);
+
+        // A fraction used to truncate to 2 without saying so.
+        let (config, warnings) = one("grid_columns", "2.5");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("whole number"), "{warnings:?}");
         assert_eq!(config.grid_columns, Config::default().grid_columns);
 
         let (config, warnings) = one("click_after_warp", "perhaps");
@@ -479,6 +503,19 @@ mod tests {
         let (config, warnings) = one("hint_charset", "asdf;jkl");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(config.hint_charset, "asdf;jkl".chars().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_repeated_alphabet_character_is_rejected() {
+        let warnings = warns("hint_charset: aab\n");
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("must not repeat")),
+            "{warnings:?}"
+        );
+        // The bad line is ignored, so the default alphabet remains usable.
+        assert_eq!(Config::default().hint_charset.len(), 20);
     }
 
     #[test]
@@ -515,11 +552,17 @@ mod tests {
 
     #[test]
     fn colours_accept_six_or_eight_hex_digits_with_or_without_a_hash() {
-        assert_eq!(one("accent", "0A84FF").0.theme.accent, Rgba::rgb(0x0A, 0x84, 0xFF));
-        assert_eq!(one("accent", "#0a84ff").0.theme.accent, Rgba::rgb(0x0A, 0x84, 0xFF));
+        assert_eq!(
+            one("accent", "0A84FF").0.theme.accent,
+            Rgba::rgb(0x0A, 0x84, 0xFF)
+        );
+        assert_eq!(
+            one("accent", "#0a84ff").0.theme.accent,
+            Rgba::rgb(0x0A, 0x84, 0xFF)
+        );
         assert_eq!(
             one("panel", "1C1C1EE0").0.theme.panel,
-            Rgba::rgba(0x1C, 0x1C, 0x1E, 0xE0)
+            Rgba::rgba8(0x1C, 0x1C, 0x1E, 0xE0)
         );
         assert_eq!(one("text", "FFFFFF").0.theme.text.a, 255);
         // Grid lines and borders are tints of the accent, not separate colours.
@@ -544,7 +587,10 @@ mod tests {
             .chain(config.bindings.grid_cells.iter())
             .copied()
             .collect();
-        assert_eq!(config.unreachable_bindings(&reachable), Vec::<String>::new());
+        assert_eq!(
+            config.unreachable_bindings(&reachable),
+            Vec::<String>::new()
+        );
 
         // Take the key that leaves the session away from the layout: nothing the
         // user presses can end it, and that has to be said out loud.
@@ -558,19 +604,44 @@ mod tests {
         let (bound, _) = parse("grid_cells: F12 grave\n");
         let empty: HashSet<Keysym> = HashSet::new();
         let reported = bound.unreachable_bindings(&empty);
-        assert!(reported.contains(&"grid_cells (F12)".to_string()), "{reported:?}");
-        assert!(reported.contains(&"grid_cells (grave)".to_string()), "{reported:?}");
+        assert!(
+            reported.contains(&"grid_cells (F12)".to_string()),
+            "{reported:?}"
+        );
+        assert!(
+            reported.contains(&"grid_cells (grave)".to_string()),
+            "{reported:?}"
+        );
     }
 
     #[test]
     fn every_documented_option_has_a_recognised_name() {
         // A typo in the table would otherwise only show up as a silent default.
         for option in [
-            "quit", "normal_left", "normal_right", "normal_up", "normal_down",
-            "edge_left", "edge_middle", "edge_right", "scroll_up", "scroll_down",
-            "button_left", "button_middle", "button_right", "drag", "grid_mode",
-            "hint_mode", "grid_up", "grid_down", "grid_left", "grid_right",
-            "grid_back", "grid_warp", "grid_warp_click", "hint_back",
+            "quit",
+            "normal_left",
+            "normal_right",
+            "normal_up",
+            "normal_down",
+            "edge_left",
+            "edge_middle",
+            "edge_right",
+            "scroll_up",
+            "scroll_down",
+            "button_left",
+            "button_middle",
+            "button_right",
+            "drag",
+            "grid_mode",
+            "hint_mode",
+            "grid_up",
+            "grid_down",
+            "grid_left",
+            "grid_right",
+            "grid_back",
+            "grid_warp",
+            "grid_warp_click",
+            "hint_back",
         ] {
             let warnings = warns(&format!("{option}: F12\n"));
             assert!(
@@ -579,9 +650,18 @@ mod tests {
             );
         }
         for option in [
-            "step", "grid_columns", "grid_rows", "grid_min_span", "grid_cells",
-            "hint_cell", "hint_charset", "click_after_warp", "font_family",
-            "accent", "text", "panel",
+            "step",
+            "grid_columns",
+            "grid_rows",
+            "grid_min_span",
+            "grid_cells",
+            "hint_cell",
+            "hint_charset",
+            "click_after_warp",
+            "font_family",
+            "accent",
+            "text",
+            "panel",
         ] {
             let warnings = warns(&format!("{option}: F12\n"));
             assert!(
@@ -621,8 +701,14 @@ mod tests {
     #[test]
     fn two_keys_on_one_line_both_bind() {
         let (config, _) = one("hint_mode", "f a");
-        assert_eq!(config.bindings.normal.get(&parse_key("f").unwrap()), Some(&Action::ToHint));
-        assert_eq!(config.bindings.normal.get(&parse_key("a").unwrap()), Some(&Action::ToHint));
+        assert_eq!(
+            config.bindings.normal.get(&parse_key("f").unwrap()),
+            Some(&Action::ToHint)
+        );
+        assert_eq!(
+            config.bindings.normal.get(&parse_key("a").unwrap()),
+            Some(&Action::ToHint)
+        );
     }
 
     #[test]
@@ -686,7 +772,10 @@ mod tests {
                 "{mode:?} lost quit"
             );
         }
-        assert_eq!(config.bindings.normal.get(&parse_key("Escape").unwrap()), None);
+        assert_eq!(
+            config.bindings.normal.get(&parse_key("Escape").unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -701,14 +790,27 @@ mod tests {
     #[test]
     fn grid_actions_bind_into_the_grid_table() {
         let (config, _) = one("grid_warp", "space");
-        assert_eq!(config.bindings.grid.get(&parse_key("space").unwrap()), Some(&Action::GridWarp));
-        assert!(config.bindings.normal.is_empty() || config.bindings.normal.values().all(|a| *a != Action::GridWarp));
+        assert_eq!(
+            config.bindings.grid.get(&parse_key("space").unwrap()),
+            Some(&Action::GridWarp)
+        );
+        assert!(
+            config.bindings.normal.is_empty()
+                || config
+                    .bindings
+                    .normal
+                    .values()
+                    .all(|a| *a != Action::GridWarp)
+        );
     }
 
     #[test]
     fn hint_back_binds_into_the_hint_table() {
         let (config, _) = one("hint_back", "b");
-        assert_eq!(config.bindings.hint.get(&parse_key("b").unwrap()), Some(&Action::HintBack));
+        assert_eq!(
+            config.bindings.hint.get(&parse_key("b").unwrap()),
+            Some(&Action::HintBack)
+        );
     }
 
     #[test]
@@ -723,7 +825,10 @@ mod tests {
         let xdg = resolve_path(Some(PathBuf::from("/xdg")), Some(PathBuf::from("/home/u")));
         assert_eq!(xdg, Some(PathBuf::from("/xdg/windhover/config")));
         let home = resolve_path(None, Some(PathBuf::from("/home/u")));
-        assert_eq!(home, Some(PathBuf::from("/home/u/.config/windhover/config")));
+        assert_eq!(
+            home,
+            Some(PathBuf::from("/home/u/.config/windhover/config"))
+        );
         assert_eq!(resolve_path(None, None), None);
     }
 
@@ -813,7 +918,12 @@ mod consistency {
             ("grid_down", Mode::Grid, "j", Action::GridDown),
             ("grid_back", Mode::Grid, "BackSpace", Action::GridBack),
             ("grid_warp", Mode::Grid, "Return", Action::GridWarp),
-            ("grid_warp_click", Mode::Grid, "space", Action::GridWarpClick),
+            (
+                "grid_warp_click",
+                Mode::Grid,
+                "space",
+                Action::GridWarpClick,
+            ),
             ("hint_back", Mode::Hint, "BackSpace", Action::HintBack),
         ];
         for (option, mode, key, action) in expected {

@@ -27,8 +27,8 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
-use rustix::fs::{memfd_create, MemfdFlags};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use rustix::fs::{MemfdFlags, memfd_create};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{

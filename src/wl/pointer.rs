@@ -1,8 +1,8 @@
 //! Virtual pointer: absolute motion, buttons, wheel.
 
 use wayland_client::{
-    protocol::{wl_pointer, wl_seat},
     QueueHandle,
+    protocol::{wl_pointer, wl_seat},
 };
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
@@ -65,17 +65,16 @@ impl VirtualPointer {
     /// never occur alone: wlroots drops a discrete event with no `axis` behind
     /// it, and Smithay adds the two values together and scrolls twice as far.
     /// Positive steps scroll down, matching the sign convention of `wl_pointer`.
-    pub fn scroll(&self, steps: i32) {
-        if steps == 0 {
+    /// The amount may be fractional: the speed preset scales it before it gets
+    /// here.
+    pub fn scroll(&self, steps: f64) {
+        if steps == 0.0 {
             return;
         }
-        let value = steps as f64 * 15.0;
+        let value = steps * 15.0;
         self.proxy.axis_source(wl_pointer::AxisSource::Wheel);
-        self.proxy.axis(
-            timestamp_ms(),
-            wl_pointer::Axis::VerticalScroll,
-            value,
-        );
+        self.proxy
+            .axis(timestamp_ms(), wl_pointer::Axis::VerticalScroll, value);
         self.proxy.frame();
     }
 

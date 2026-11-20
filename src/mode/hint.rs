@@ -1,7 +1,7 @@
 //! Hint mode: labelled targets, prefix filtering, warp on unique match.
 
-use crate::hint::lattice::Cell;
 use crate::hint::labels;
+use crate::hint::lattice::Cell;
 use crate::keys::Action;
 use crate::mode::{Effect, Mode};
 use crate::wl::pointer::BTN_LEFT;
@@ -106,7 +106,9 @@ impl Hint {
 
 fn starts_with(label: &str, prefix: &[char]) -> bool {
     let mut chars = label.chars();
-    prefix.iter().all(|expected| chars.next() == Some(*expected))
+    prefix
+        .iter()
+        .all(|expected| chars.next() == Some(*expected))
 }
 
 #[cfg(test)]

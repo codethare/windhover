@@ -13,19 +13,21 @@ where the target is known but its coordinates are not.
 By default hint mode SHALL generate a regular lattice across the target output as
 its target source: the output is partitioned into a grid of cells, and each cell
 carries one target at its centre and one label from the configured alphabet. The
-partition SHALL cover the whole output, and the label set SHALL be prefix-free
-(no label is a prefix of another), so that reaching a unique match while typing
-is enough to position immediately. The label length SHALL be the shortest the
-alphabet can name the chosen number of cells in: two characters for the default
-twenty-character alphabet.
+partition SHALL cover the whole output, and SHALL NOT have more cells on either
+axis than the alphabet has characters, so that a cell grows rather than a label
+growing. The label set SHALL be prefix-free (no label is a prefix of another), so
+that reaching a unique match while typing is enough to position immediately. The
+label length SHALL be the shortest the alphabet can name the chosen number of
+cells in, and the spare room in that budget SHALL become one-character labels for
+the first targets in the lattice's order.
 
 #### Scenario: Generating lattice hints
 
 - **WHEN** the user presses `f` in normal mode to enter hint mode
-- **THEN** the overlay draws a translucent cell over each target region with a
-  label centred in it, the labels are taken from the configured alphabet, every
-  label is two characters long under the default alphabet, and no two labels
-  where one is a prefix of the other are produced
+- **THEN** the overlay draws a grid of cells with a label centred in each, the
+  labels are taken from the configured alphabet, every label is one or two
+  characters long, and no two labels where one is a prefix of the other are
+  produced
 
 #### Scenario: The cells tile the output
 
@@ -35,23 +37,37 @@ twenty-character alphabet.
 
 #### Scenario: More targets than the alphabet can label
 
-- **WHEN** the configured lattice spacing asks for more cells than the alphabet
-  can name in two characters
-- **THEN** the session raises the label length to three characters while keeping
-  the labels prefix-free and never producing duplicate labels
+- **WHEN** the configured lattice spacing asks for more cells on an axis than the
+  alphabet has characters
+- **THEN** that axis is capped at the alphabet's length, the cells grow to cover
+  the output, and every label stays at two characters rather than growing to
+  three
 
 #### Scenario: More targets than the alphabet can name at all
 
 - **WHEN** the configured lattice spacing asks for more cells than the alphabet
-  can name in three characters
-- **THEN** the session refuses to start and says which option is too dense,
-  rather than dropping targets or repeating labels
+  can name
+- **THEN** the session runs with the capped lattice rather than refusing to
+  start, and never produces a duplicate label
 
 #### Scenario: Density is configurable
 
 - **WHEN** the configuration sets the hint lattice spacing
-- **THEN** the number of cells follows that spacing, and the labels stay
-  prefix-free at whatever length the cell count needs
+- **THEN** the number of cells follows that spacing up to the alphabet's cap, and
+  the labels stay prefix-free
+
+#### Scenario: Spare budget shortens the first labels
+
+- **WHEN** the number of cells leaves room in the two-character budget
+- **THEN** as many of the first targets as that room allows carry a
+  one-character label, and the remaining labels do not start with any character
+  those short labels used
+
+#### Scenario: A label keeps its angular size
+
+- **WHEN** the output is taller than 720 logical pixels
+- **THEN** the label type size grows in proportion, so a label covers the same
+  fraction of the output rather than getting smaller as the output grows
 
 ### Requirement: Prefix filtering
 
@@ -79,8 +95,10 @@ disappear from the overlay or be visibly de-emphasised.
 ### Requirement: Behaviour after a match
 
 On a unique match the session SHALL position the pointer at the target's centre,
-remove the overlay so the target window is visible, and by default switch to
-normal mode so the user can adjust.
+give up its keyboard grab — the overlay keeps its empty input region, so the
+target window already has the pointer — and by default switch to normal mode so
+the user can adjust. With clicking after a warp enabled, the click
+SHALL end the session, as every click does.
 
 #### Scenario: Position and switch by default
 
@@ -91,8 +109,8 @@ normal mode so the user can adjust.
 #### Scenario: Clicking after a match
 
 - **WHEN** the configuration enables clicking after a warp
-- **THEN** after positioning, one left click is injected at the target's centre
-  with the overlay removed, and the session then switches to normal mode
+- **THEN** after positioning, the keyboard grab is given up, one left click is
+  injected at the target's centre, and the session then exits with status 0
 
 #### Scenario: Positioning accuracy
 
@@ -123,20 +141,34 @@ that exits the session immediately.
 ### Requirement: Consistent hint cells
 
 Hint mode's cells SHALL be tied to their target and SHALL not make the visual
-content at the target's centre completely unreadable: the cell SHALL be a
-translucent fill with a hairline edge rather than an opaque panel, so what is
-underneath stays visible. The cell and its label SHALL use the same font, corner
-radii and colour rules as grid mode's key hints.
+content at the target completely unreadable. The lattice SHALL be drawn as
+hairline grid lines rather than as a fill over every cell, and a cell SHALL be
+filled, translucently, only while the labels are being narrowed, so that the
+thing being aimed at stays visible and the frame does not cost as much as filling
+the screen. The cell and its label SHALL use the same font, corner radii and
+colour rules as grid mode's key hints.
 
 #### Scenario: The badge does not cover the target centre
 
 - **WHEN** a cell is drawn for a target
 - **THEN** the area it covers does not render the visual content at the target's
-  centre completely unreadable, because the fill is translucent and what is under
-  it stays visible
+  centre completely unreadable, because an unfiltered lattice is lines rather
+  than a fill and a filtered cell's fill is translucent
 
 #### Scenario: Legible on any background
 
 - **WHEN** a cell is drawn over a light or a dark background
 - **THEN** the label text and the cell's hairline edge keep enough contrast
   against it, with a stroke or a backing panel if that is what it takes
+
+#### Scenario: A typed character fills what is left
+
+- **WHEN** the user types a character that narrows the labels
+- **THEN** the cells whose labels still match are filled translucently and the
+  rest are left as lines
+
+#### Scenario: A redraw does not redraw the labels
+
+- **WHEN** a frame is drawn after the first one with the same theme and scale
+- **THEN** the labels are taken from the frame before rather than rasterized
+  again

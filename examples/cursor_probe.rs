@@ -43,14 +43,14 @@
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
-use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use rustix::fs::{memfd_create, ftruncate, MemfdFlags};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
 };
-use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
+use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -103,8 +103,16 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { surface_x, surface_y, .. }
-            | wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            }
+            | wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
                 // The last position wins: the probe is started before the keys
                 // that move the cursor.
                 state.position = Some((surface_x, surface_y));
@@ -112,22 +120,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             }
             wl_pointer::Event::Button {
                 button,
-                state: pressed,
+                state:
+                    wayland_client::WEnum::Value(
+                        wayland_client::protocol::wl_pointer::ButtonState::Pressed,
+                    ),
                 ..
             } => {
-                if let wayland_client::WEnum::Value(wayland_client::protocol::wl_pointer::ButtonState::Pressed) = pressed
-                {
-                    state.clicks.push((
-                        button,
-                        state.position.map(|p| p.0).unwrap_or_default(),
-                        state.position.map(|p| p.1).unwrap_or_default(),
-                    ));
-                }
+                state.clicks.push((
+                    button,
+                    state.position.map(|p| p.0).unwrap_or_default(),
+                    state.position.map(|p| p.1).unwrap_or_default(),
+                ));
             }
-            wl_pointer::Event::Axis { axis, value, .. } => {
-                if let wayland_client::WEnum::Value(axis) = axis {
-                    state.axis.get_or_insert((axis as u32, value));
-                }
+            wl_pointer::Event::Axis {
+                axis: wayland_client::WEnum::Value(axis),
+                value,
+                ..
+            } => {
+                state.axis.get_or_insert((axis as u32, value));
             }
             _ => {}
         }
@@ -143,22 +153,24 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities { capabilities } = event {
-            if let wayland_client::WEnum::Value(capabilities) = capabilities {
-                if capabilities.contains(wl_seat::Capability::Pointer) {
-                    seat.get_pointer(qh, ());
-                }
-                if capabilities.contains(wl_seat::Capability::Keyboard) {
-                    // Kept alive by the seat's own refcount while the probe runs;
-                    // only the focus changes are interesting here.
-                    let _ = seat.get_keyboard(qh, ());
-                }
+        if let wl_seat::Event::Capabilities {
+            capabilities: wayland_client::WEnum::Value(capabilities),
+        } = event
+        {
+            if capabilities.contains(wl_seat::Capability::Pointer) {
+                seat.get_pointer(qh, ());
+            }
+            if capabilities.contains(wl_seat::Capability::Keyboard) {
+                // Kept alive by the seat's own refcount while the probe runs;
+                // only the focus changes are interesting here.
+                let _ = seat.get_keyboard(qh, ());
             }
         }
     }
 }
 
-impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {    fn event(
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
+    fn event(
         state: &mut Self,
         surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
@@ -167,7 +179,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {    fn e
         _: &QueueHandle<Self>,
     ) {
         match event {
-            zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
                 surface.ack_configure(serial);
                 state.configured = Some((width, height));
             }
@@ -222,10 +238,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
             xdg_toplevel::Event::Configure { width, height, .. } => {
                 // Sway sends 0 for "you choose" on a tiling window; a buffer
                 // cannot be zero-sized, so fall back to something usable.
-                state.toplevel_size = Some((
-                    width.max(1) as u32,
-                    height.max(1) as u32,
-                ));
+                state.toplevel_size = Some((width.max(1) as u32, height.max(1) as u32));
             }
             xdg_toplevel::Event::Close => state.closed = true,
             _ => {}
@@ -338,17 +351,22 @@ fn main() {
         // Kept alive: dropping the xdg proxies would unmap the window.
         std::mem::forget((xdg_surface, tl));
         attach_probe_buffer(&shm, &surface, &qh, width, height, fill);
-        run_probe(connection, queue, state, shm, surface, qh, fill, timeout, min_lifetime, settle);
+        run_probe(
+            connection,
+            queue,
+            state,
+            shm,
+            surface,
+            qh,
+            fill,
+            timeout,
+            min_lifetime,
+            settle,
+        );
         return;
     }
-    let layer_surface = layer_shell.get_layer_surface(
-        &surface,
-        None,
-        layer,
-        "cursor-probe".to_string(),
-        &qh,
-        (),
-    );
+    let layer_surface =
+        layer_shell.get_layer_surface(&surface, None, layer, "cursor-probe".to_string(), &qh, ());
     match band {
         Some(height) => {
             layer_surface.set_size(0, height);
@@ -378,9 +396,22 @@ fn main() {
             break;
         }
     }
-    let (width, height) = state.configured.expect("layer surface was never configured");
+    let (width, height) = state
+        .configured
+        .expect("layer surface was never configured");
     attach_probe_buffer(&shm, &surface, &qh, width, height, fill);
-    run_probe(connection, queue, state, shm, surface, qh, fill, timeout, min_lifetime, settle);
+    run_probe(
+        connection,
+        queue,
+        state,
+        shm,
+        surface,
+        qh,
+        fill,
+        timeout,
+        min_lifetime,
+        settle,
+    );
 }
 
 /// A fully transparent buffer at the configured surface size. It cannot be
@@ -412,7 +443,15 @@ fn attach_probe_buffer(
             .expect("paint");
     }
     let pool = shm.create_pool(fd.as_fd(), len as i32, qh, ());
-    let buffer = pool.create_buffer(0, width as i32, height as i32, stride, wl_shm::Format::Argb8888, qh, ());
+    let buffer = pool.create_buffer(
+        0,
+        width as i32,
+        height as i32,
+        stride,
+        wl_shm::Format::Argb8888,
+        qh,
+        (),
+    );
     pool.destroy();
     surface.attach(Some(&buffer), 0, 0);
     surface.damage(0, 0, width as i32, height as i32);

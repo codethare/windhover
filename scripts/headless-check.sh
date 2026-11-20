@@ -790,27 +790,37 @@ else
   fail "the refusal does not name the option: $(cat "$RUNTIME/oneshot-bad.out")"
 fi
 
-echo "check: a release that never arrives does not repeat forever"
+echo "check: a release that never arrives stops repeating without ending the session"
 # A compositor can swallow a key's release without saying anything — river does
 # when a drag turns into a drag-and-drop — and then the repeat would travel
-# forever with the button still down and no key able to stop it. Nothing tells
-# that apart from a user really holding the key, so the hold is bounded.
+# forever with the button still down. Nothing tells that apart from a user
+# really holding the key, so the hold is bounded: the expired repeat stops and a
+# drag is released, but a legitimate long hold does not throw the session away.
 session_start --normal
 if session_alive; then
   inject "mods:shift tap:h mods:"
   inject "down:l"
   sleep 7
-  if session_alive; then
-    fail "the session kept repeating a key whose release never arrived"
-    kill "$SESSION_PID" 2>/dev/null || true
-  elif grep -q "release never arrived" "$RUNTIME/session.out"; then
-    pass "the session ended itself — $(head -1 "$RUNTIME/session.out")"
+  if ! session_alive; then
+    fail "the session ended on a legitimate long hold: $(cat "$RUNTIME/session.out")"
+  elif grep -q "release was probably lost" "$RUNTIME/session.out"; then
+    pass "the repeat stopped and the session stayed up"
   else
-    fail "the session ended without saying why: $(cat "$RUNTIME/session.out")"
+    fail "the repeat limit did not say why: $(cat "$RUNTIME/session.out")"
   fi
   # The key is still down as far as the compositor is concerned, and a session
   # started later would seed it from `Enter` and then ignore that key.
   inject "up:l"
+  inject "tap:Escape"
+  sleep 1
+  if session_alive; then
+    fail "Escape did not end the session after the repeat limit"
+    kill "$SESSION_PID" 2>/dev/null || true
+  else
+    pass "Escape still ends it"
+  fi
+else
+  fail "session did not start: $(cat "$RUNTIME/session.out")"
 fi
 
 echo "check: a session that loses the keyboard ends itself"

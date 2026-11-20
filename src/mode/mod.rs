@@ -19,12 +19,24 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Effect {
     /// Relative move, in logical pixels.
-    Move { dx: f64, dy: f64 },
+    Move {
+        dx: f64,
+        dy: f64,
+    },
     /// Absolute move, in logical pixels inside the overlay.
-    Warp { x: f64, y: f64 },
-    Click { button: u32 },
-    /// Positive scrolls down, matching the `wl_pointer` sign convention.
-    Scroll { steps: i32 },
+    Warp {
+        x: f64,
+        y: f64,
+    },
+    Click {
+        button: u32,
+    },
+    /// Wheel steps; positive scrolls down, matching the `wl_pointer` sign
+    /// convention. The session scales this by the speed preset, so the amount
+    /// may be fractional.
+    Scroll {
+        steps: f64,
+    },
     /// Hold or release the left button with no matching release, for dragging.
     Drag(bool),
     /// The factor every later movement and scroll is scaled by.
